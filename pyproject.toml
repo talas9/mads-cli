@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mads-cli"
+dynamic = ["version"]
+description = "CLI for Meta (Facebook/Instagram) Ads — Marketing API, Conversions API, and Commerce Manager"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+keywords = ["meta-ads", "facebook-ads", "instagram-ads", "conversions-api", "commerce-manager", "cli", "claude-code", "codex"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Office/Business",
+]
+dependencies = [
+    "click>=8.1",
+    "requests>=2.33.0",
+    "python-dotenv>=1.2.2",
+]
+# Note: no google-auth equivalent is needed here — Meta's OAuth token
+# exchange and appsecret_proof computation only need stdlib (hmac, hashlib,
+# http.server, urllib.parse); see mads_lib/auth.py and generate_token.py.
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0",
+    "pytest-cov>=6.0",
+]
+
+[project.scripts]
+mads = "mads_lib.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/talas9/mads-cli"
+Repository = "https://github.com/talas9/mads-cli"
+Issues = "https://github.com/talas9/mads-cli/issues"
+
+[tool.setuptools.packages.find]
+include = ["mads_lib*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "mads_lib.__version__"}

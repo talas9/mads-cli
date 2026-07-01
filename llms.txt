@@ -1,0 +1,38 @@
+# mads CLI
+
+A Meta (Facebook/Instagram) Ads CLI built for agent-driven automation.
+
+## Discovery
+
+> Run `tools/mads catalog --json` to get the full command/parameter manifest.
+> This is the canonical entry point — do not hardcode command lists.
+
+## Reference
+
+- AGENTS.md — full capability index, output contract, exit codes (incl. mads-specific
+  `RATE_LIMIT=8`), mutation discipline, Known Gotchas
+- `tools/mads --help` — top-level usage
+- `tools/mads <command> --help` — per-command usage
+
+## Quick facts
+
+- 59 commands across 11 groups (Core, Auth, Campaign, Ad Set, Ad, Creative, Insights, A/B Test,
+  Business, Page, Webhook) — verified via live Click-tree walk.
+- Page reviews/reply-review: does not exist and never will — Meta's ratings API returns error
+  code 12 on every version; no reply endpoint has ever existed.
+- Webhooks: exactly 5 fixed trigger fields, not general change-detection.
+- Batch mutate: hard 50-operation limit, enforced client-side.
+- Every authenticated call requires `appsecret_proof` (HMAC-SHA256 of the access token, keyed by
+  `META_APP_SECRET`) — set it or every API call fails.
+- `audiences.py`, `commerce.py`, `capi.py`, `analyze/*` are library-only — no CLI commands wrap
+  them yet.
+
+## Account
+
+- Currency/timezone configured via `MADS_CURRENCY` / `MADS_TIMEZONE`
+- API version: `v25.0` (Meta Marketing/Graph API)
+
+## Also see gads-cli
+
+For Google Ads, GBP, Merchant Center, GA4, and Search Console — the sister CLI:
+https://github.com/talas9/gads-cli

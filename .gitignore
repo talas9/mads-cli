@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environment & credentials — NEVER commit these
+.env
+*.env
+!.env.example
+credentials/
+*.json
+!pyproject.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+.cursor/
+*.swp
+*~
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Logs
+*.log
+
+# Virtual environments
+.venv/
+venv/
+
+# Lock files
+uv.lock

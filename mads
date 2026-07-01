@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""mads — Meta (Facebook/Instagram) Ads CLI. Thin entry point."""
+from mads_lib.cli import cli
+
+if __name__ == "__main__":
+    cli()
