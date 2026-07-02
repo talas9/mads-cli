@@ -51,7 +51,7 @@ into the JSON error object.
 
 ## Command Taxonomy
 
-Verified by walking the live Click tree (`mads catalog`) — **89 commands** across 16 groups (15
+Verified by walking the live Click tree (`mads catalog`) — **106 commands** across 18 groups (17
 resource groups plus Core).
 
 | Group | Commands | Description |
@@ -65,23 +65,28 @@ resource groups plus Core).
 | **Insights** | `insights campaign`, `adset`, `ad`, `async-submit`, `async-status`, `async-fetch` | Synchronous + async (long-running report job) Insights at all 3 levels |
 | **A/B Test** | `abtest create`, `list`, `status` | Ad Studies (split test) management |
 | **Business** | `business info`, `adaccounts`, `pages`, `users`, `system-user create/list`, `token generate/renew` | Business Manager account/page/user listing + System User + token management |
-| **Page** | `page info`, `insights` | Page profile + organic Page/Post Insights (**no reviews** — see Known Gotchas) |
+| **Page** | `page info`, `insights`, `update` | Page profile read/update + organic Page/Post Insights (**no reviews** — see Known Gotchas) |
 | **Webhook** | `webhook subscribe`, `list`, `unsubscribe` | Ad-account webhook subscriptions (**5 fixed triggers only** — see Known Gotchas) |
 | **Audience** | `audience list`, `create`, `create-lookalike`, `upload-users`, `delete` | Custom/Lookalike Audience CRUD + hashed-PII user upload |
 | **Commerce** | `commerce create-catalog`, `create-feed`, `upload-feed`, `create-product`, `list-products`, `batch-update`, `batch-status` | Commerce Manager: ProductCatalog/ProductFeed/ProductItem CRUD + Catalog Batch API |
 | **CAPI** | `capi create-pixel`, `create-dataset`, `list-pixels`, `send-event`, `test-event`, `hash-user-data` | Conversions API pixel/dataset management, server-side event send, local PII hashing utility |
 | **Analyze** | `analyze audit`, `budget-pacing`, `creative-fatigue`, `audience-overlap`, `placement-breakdown` | Read-only analysis (mirrors gads-cli's `analyze` group) — none of these mutate the account |
 | **WhatsApp** | `whatsapp waba info/phone-numbers`, `phone-number info`, `template list/create`, `send`, `webhook subscribe` | WhatsApp Business Platform (Cloud API) — a **separate Meta product** from the Marketing/Graph API surface above; **not yet onboarded for Talas** (no WABA — see Known Gotchas #6) |
+| **Post** | `post create`, `create-ig`, `list`, `delete` | Facebook Page + Instagram organic content (posts/media) — **live commands blocked on missing OAuth scopes** (see Known Gotchas #8) |
+| **Comment** | `comment list`, `reply`, `hide`, `delete` | Facebook Page + Instagram comment moderation — **same permission gap as Post** (see Known Gotchas #8) |
 
 > Note: `auth system-user`/`auth token` and `business system-user`/`business token` both exist
 > and call the same Business Manager System User endpoints (`POST/GET {business_id}/system_users`,
 > `POST {system_user_id}/access_tokens`). This is intentional — two entry points to the same
 > operation, not a bug — pick whichever reads more naturally for the calling context.
 
-The `audience`/`commerce`/`capi`/`analyze` Click groups are defined directly in `mads_lib/cli.py`
-(not in `audiences.py`/`commerce.py`/`capi.py`/`analyze/*.py` themselves, which remain pure
-function libraries) — this mirrors gads-cli's convention of wiring `gads_lib/merchant.py` and
-`gads_lib/analyze/*.py` via a Click group defined in `gads_lib/cli.py`.
+The `audience`/`commerce`/`capi`/`analyze`/`post`/`comment` Click groups are defined directly in
+`mads_lib/cli.py` (not in `audiences.py`/`commerce.py`/`capi.py`/`analyze/*.py`/`posts.py`/
+`comments.py` themselves, which remain pure function libraries) — this mirrors gads-cli's
+convention of wiring `gads_lib/merchant.py` and `gads_lib/analyze/*.py` via a Click group defined
+in `gads_lib/cli.py`. `page update`, by contrast, lives directly in `mads_lib/pages.py` alongside
+`page info`/`page insights`, since the `page` group itself is already defined there (not wrapped
+from `cli.py`).
 
 ## Reading Project Memory
 
@@ -194,6 +199,40 @@ command in `mads_lib/whatsapp.py` fails gracefully with a VALIDATION error
 `whatsapp webhook subscribe` additionally requires `META_APP_ID`/`META_APP_SECRET` (it uses an
 App Access Token — `app_id|app_secret` — not the general user/system-user token this CLI uses
 elsewhere). See `kb/whatsapp-business-platform.md` for full detail.
+
+**8. `post`/`comment`/`page update` commands are blocked until the app is granted 6 new
+permissions.** Every `post create`/`create-ig`/`list`/`delete`, `comment list`/`reply`/`hide`/
+`delete`, and `page update` call will fail live — `create`/`list`/`delete`-style calls typically
+with a `(#200)` permissions error, `page update` with the same class of failure — because none of
+`pages_manage_posts`, `pages_manage_engagement`, `pages_manage_metadata`, `instagram_basic`,
+`instagram_content_publish`, `instagram_manage_comments` are granted on the live Talas token.
+Root-caused 2026-07-02, same class of gap as Gotcha #6's `catalog_management` block:
+
+- Confirmed via `GET /me/permissions`: the granted-permissions list currently contains
+  `ads_management, ads_read, business_management, pages_read_engagement, pages_show_list` and
+  none of the six scopes above.
+- `generate_token.py`'s `SCOPES` list was missing all six until this feature was built — they are
+  now present (uncommented, active) in `SCOPES`, but adding them to the *code* does not grant them
+  on the *live token*; only a fresh interactive OAuth consent does that.
+- **Not fixable via any API call available to an agent session** — there is no endpoint that lets
+  an authenticated admin self-grant a new OAuth permission scope to their own existing token.
+- **Manual remediation steps for the account owner** (numbered, precise — perform in this order):
+  1. Confirm the six scopes are present in `mads-cli/generate_token.py`'s `SCOPES` list (already
+     done as of this addition — nothing to edit here unless they were later removed).
+  2. Re-run the interactive OAuth flow: `python generate_token.py` (or `--no-browser
+     --print-url-only` on a headless host, then open the printed URL manually) to mint a new
+     long-lived token carrying the new scopes — this step requires the account owner's
+     browser/login session and cannot be completed by an agent.
+  3. If Meta requires App Review before granting any of these (Standard Access is typically
+     sufficient for an app whose only calls are made by an admin of the Page/IG asset being
+     posted to — verify this holds at grant time rather than assuming it, per the `catalog_management`
+     precedent proving that assumption can silently fail), complete App Review for the specific
+     permission(s) that require it under App Dashboard → App Review → Permissions and Features
+     before step 2 will succeed for those scopes.
+  4. Verify with `mads query --node me/permissions --json` that all six scopes now show
+     `"status": "granted"`.
+  5. Only then re-test a real (disposable, easily-deletable) post/comment live — see the
+     Verification section of the originating plan for this feature.
 
 ## KB Version Drift Rule
 

@@ -9,13 +9,17 @@ API expects on every authenticated request when App Secret Proof is enabled.
 
 See generate_token.py for how MADS_CREDENTIALS_PATH is produced.
 """
+import contextlib
 import hashlib
 import hmac
+import io
 import json
+import sys
 
 import click
 
 from .config import APP_SECRET, CREDS_PATH, PAGE_TOKENS_PATH
+from .output import EXIT_CODES
 
 
 def get_access_token():
@@ -163,3 +167,42 @@ def get_page_access_token(page_id, user_token=None, force_refresh=False):
         json.dump(cache, f, indent=2)
 
     return found
+
+
+def graph_request_with_page_token(page_id, method, path, *, params=None, json_body=None,
+                                   files=None, timeout=30, as_json=False, user_token=None):
+    """Call the Graph API against `path` using a cached Page Access Token for `page_id`,
+    retrying exactly once with a freshly-fetched token if the cached one turns out to have
+    been invalidated out-of-band (Meta error 190, AUTH).
+
+    Promoted from `mads_lib/pages.py`'s original `_insights_request_with_retry()` (which
+    only handled `GET /{page_id}/insights`) into this general-purpose helper so every
+    page-token-scoped edge shares one cache/retry implementation instead of duplicating it:
+    Page Insights and Page profile updates (`pages.py`), and the organic-content endpoints
+    in `posts.py`/`comments.py` (feed/photos/videos, and Instagram's two-step
+    /media -> /media_publish flow — the "Instagram API with Facebook Login" track uses this
+    exact same Page Access Token mechanism, not a separate Instagram-specific token).
+
+    See `get_page_access_token()`'s docstring for why disk-caching a Page token is safe
+    (confirmed non-expiring, independent of the parent user token's own expiry) and why a
+    single retry-on-190 is the right response to out-of-band invalidation rather than a
+    full retry loop. `user_token`, if given, is forwarded to `get_page_access_token()` for
+    the (rare) case a caller already holds a user token and wants to skip the
+    `get_access_token()` file read.
+    """
+    from .http import graph_request  # local import: http.py imports this module at load time
+
+    page_token = get_page_access_token(page_id, user_token=user_token)
+    out_buf, err_buf = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+            return graph_request(method, path, params=params, json_body=json_body, files=files,
+                                  token=page_token, timeout=timeout, as_json=as_json)
+    except SystemExit as exc:
+        if exc.code == EXIT_CODES["AUTH"]:
+            page_token = get_page_access_token(page_id, user_token=user_token, force_refresh=True)
+            return graph_request(method, path, params=params, json_body=json_body, files=files,
+                                  token=page_token, timeout=timeout, as_json=as_json)
+        sys.stdout.write(out_buf.getvalue())
+        sys.stderr.write(err_buf.getvalue())
+        raise

@@ -62,6 +62,23 @@ SCOPES = [
     "business_management",
     "pages_read_engagement",
     "pages_show_list",
+    # Organic content (Instagram/Facebook posts, comments, page management) — added
+    # 2026-07-02 for mads-cli's `post`/`comment`/`page update` command groups
+    # (mads_lib/posts.py, mads_lib/comments.py, mads_lib/pages.py::update_page_info).
+    # NOT YET GRANTED on the live Talas token as of this addition — confirmed via
+    # `GET /me/permissions` (absent from the granted-permissions list, same class of
+    # gap as the catalog_management precedent below). Re-running
+    # `python generate_token.py` (interactive browser OAuth re-consent — only the
+    # account owner can do this) is required before any `post`/`comment`/`page
+    # update` command will succeed live; verify with `mads query --node
+    # me/permissions --json` afterward that each scope shows "status": "granted".
+    # See AGENTS.md Known Gotchas for the full remediation steps.
+    "pages_manage_posts",
+    "pages_manage_engagement",
+    "pages_manage_metadata",
+    "instagram_basic",
+    "instagram_content_publish",
+    "instagram_manage_comments",
     # "catalog_management",  # UNCOMMENT once the app has "Catalog Management"
     # added under App Dashboard -> App Review -> Permissions and Features (App
     # ID 1332295765705902). Root-caused 2026-07-02: `mads commerce`

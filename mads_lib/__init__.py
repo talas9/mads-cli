@@ -1,6 +1,6 @@
 """Internal library for the mads CLI."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .config import (
     PROJECT_ROOT,

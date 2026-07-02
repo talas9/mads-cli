@@ -80,6 +80,8 @@ from mads_lib.whatsapp import whatsapp as whatsapp_group
 from mads_lib import audiences as _audiences
 from mads_lib import commerce as _commerce
 from mads_lib import capi as _capi
+from mads_lib import posts as _posts
+from mads_lib import comments as _comments
 
 
 @click.group(
@@ -1444,11 +1446,264 @@ def analyze_placement_breakdown_cmd(ad_account_id, days, level, campaign_id, as_
     render_placement_breakdown(result, as_json=as_json)
 
 
-# ── Group registration (audience/commerce/capi/analyze) ──────
+# ── Post (Facebook Page + Instagram organic content) ─────────
+# Wraps mads_lib/posts.py (pure Graph API client functions, no Click of its own —
+# see the NOTE near the top imports).
+
+
+def _read_caption_file(path, as_json):
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError as e:
+        raise SystemExit(print_error(f"Could not read {path}: {e}", code="VALIDATION", as_json=as_json))
+
+
+@cli.group()
+def post():
+    """Facebook Page + Instagram organic content: create/list/delete posts."""
+    pass
+
+
+@post.command("create")
+@click.option("--page-id", required=True)
+@click.option("--message", default=None)
+@click.option("--caption-file", default=None, type=click.Path(exists=True, dir_okay=False), help="Read --message from a file instead.")
+@click.option("--link", default=None)
+@click.option("--schedule-time", type=int, default=None, help="Unix timestamp; feed posts allow 10min-30day out.")
+@click.option("--dry-run", is_flag=True)
+@click.option("--yes", "-y", is_flag=True)
+@click.option("--json", "as_json", is_flag=True)
+def post_create(page_id, message, caption_file, link, schedule_time, dry_run, yes, as_json):
+    """POST /{page-id}/feed — create a Facebook Page post. Requires `pages_manage_posts`."""
+    if message and caption_file:
+        raise SystemExit(print_error("Pass at most one of --message/--caption-file.", code="VALIDATION", as_json=as_json))
+    if caption_file:
+        message = _read_caption_file(caption_file, as_json)
+    if not message and not link:
+        raise SystemExit(print_error(
+            "At least one of --message/--caption-file or --link is required.", code="VALIDATION", as_json=as_json,
+        ))
+
+    if not _confirm_and_log(f"create page post on {page_id}", "post create", dry_run, yes):
+        return
+    try:
+        result = _posts.create_page_post(
+            page_id, message=message, link=link, scheduled_publish_time=schedule_time, as_json=as_json,
+        )
+    except ValueError as e:
+        raise SystemExit(print_error(str(e), code="VALIDATION", as_json=as_json))
+    new_id = result.get("id", "") if isinstance(result, dict) else ""
+    _auto_log("post_create", f"page {page_id}", campaign_id=new_id)
+    if as_json:
+        print_json(result)
+        return
+    click.secho(f"✓ Created post on page {page_id} → id {new_id or '?'}", fg="green")
+
+
+@post.command("create-ig")
+@click.option("--ig-account-id", required=True)
+@click.option("--page-id", default=None, help="Facebook Page linked to this IG account; auto-resolved via GET /me/accounts if omitted.")
+@click.option("--caption", default=None)
+@click.option("--caption-file", default=None, type=click.Path(exists=True, dir_okay=False), help="Read --caption from a file instead.")
+@click.option("--image-url", default=None)
+@click.option("--video-url", default=None)
+@click.option("--media-type", type=click.Choice(_posts.VALID_IG_MEDIA_TYPES), default="IMAGE")
+@click.option("--dry-run", is_flag=True)
+@click.option("--yes", "-y", is_flag=True)
+@click.option("--json", "as_json", is_flag=True)
+def post_create_ig(ig_account_id, page_id, caption, caption_file, image_url, video_url, media_type, dry_run, yes, as_json):
+    """2-step Instagram publish: POST /{ig-user-id}/media then POST /{ig-user-id}/media_publish.
+
+    Requires `instagram_basic` + `instagram_content_publish`. If step 2 (publish) fails
+    after step 1 (container) already succeeded, the error output includes the orphaned
+    `creation_id` so it isn't silently lost — Meta expires unpublished containers ~24h
+    after creation.
+    """
+    if caption and caption_file:
+        raise SystemExit(print_error("Pass at most one of --caption/--caption-file.", code="VALIDATION", as_json=as_json))
+    if caption_file:
+        caption = _read_caption_file(caption_file, as_json)
+    if bool(image_url) == bool(video_url):
+        raise SystemExit(print_error("Pass exactly one of --image-url/--video-url.", code="VALIDATION", as_json=as_json))
+
+    if not _confirm_and_log(f"create + publish Instagram media on {ig_account_id}", "post create-ig", dry_run, yes):
+        return
+
+    try:
+        container = _posts.create_ig_container(
+            ig_account_id, caption=caption, image_url=image_url, video_url=video_url,
+            media_type=media_type, page_id=page_id, as_json=as_json,
+        )
+    except ValueError as e:
+        raise SystemExit(print_error(str(e), code="VALIDATION", as_json=as_json))
+
+    creation_id = container.get("id", "") if isinstance(container, dict) else ""
+    if not creation_id:
+        raise SystemExit(print_error(
+            f"create_ig_container succeeded but returned no id — full response: {container}",
+            code="API", as_json=as_json,
+        ))
+
+    try:
+        published = _posts.publish_ig_container(ig_account_id, creation_id, page_id=page_id, as_json=as_json)
+    except SystemExit as exc:
+        raise SystemExit(print_error(
+            f"Instagram container {creation_id} was created but publish failed (see error "
+            f"above) — it is orphaned, not yet published, and expires ~24h from creation. "
+            f"creation_id={creation_id}",
+            code="API", exit_code=exc.code, as_json=as_json,
+        ))
+
+    _auto_log("post_create_ig", f"ig {ig_account_id}", campaign_id=creation_id)
+    if as_json:
+        print_json({"creation_id": creation_id, "publish_result": published})
+        return
+    click.secho(f"✓ Published Instagram media on {ig_account_id} (creation_id={creation_id})", fg="green")
+
+
+@post.command("list")
+@click.option("--page-id", default=None)
+@click.option("--ig-account-id", default=None)
+@click.option("--limit", "-l", type=int, default=25)
+@click.option("--json", "as_json", is_flag=True)
+def post_list(page_id, ig_account_id, limit, as_json):
+    """List recent posts (Facebook feed) or media (Instagram)."""
+    if bool(page_id) == bool(ig_account_id):
+        raise SystemExit(print_error("Pass exactly one of --page-id/--ig-account-id.", code="VALIDATION", as_json=as_json))
+    object_id = page_id or ig_account_id
+    platform = "facebook" if page_id else "instagram"
+    result = _posts.list_posts(object_id, platform=platform, limit=limit, as_json=as_json)
+    if as_json:
+        print_json(result)
+        return
+    rows = result.get("data", []) if isinstance(result, dict) else []
+    if not rows:
+        click.echo("  (no posts)")
+        return
+    print_table([flatten(r) for r in rows])
+    click.echo(f"\n  {len(rows)} post(s)")
+
+
+@post.command("delete")
+@click.argument("post_id")
+@click.option("--page-id", required=True)
+@click.option("--dry-run", is_flag=True)
+@click.option("--yes", "-y", is_flag=True)
+@click.option("--json", "as_json", is_flag=True)
+def post_delete(post_id, page_id, dry_run, yes, as_json):
+    """DELETE /{post-id} — delete a Facebook Page post (FB only, see posts.delete_post())."""
+    if not _confirm_and_log(f"delete post {post_id}", "post delete", dry_run, yes):
+        return
+    result = _posts.delete_post(post_id, page_id, as_json=as_json)
+    _auto_log("post_delete", post_id, campaign_id=post_id)
+    if as_json:
+        print_json(result)
+        return
+    click.secho(f"✓ Deleted post {post_id}", fg="green")
+
+
+# ── Comment (Facebook Page + Instagram comment moderation) ───
+# Wraps mads_lib/comments.py (pure Graph API client functions, no Click of its own —
+# see the NOTE near the top imports).
+
+
+@cli.group()
+def comment():
+    """Facebook Page + Instagram comment moderation: list/reply/hide/delete."""
+    pass
+
+
+@comment.command("list")
+@click.option("--post-id", default=None)
+@click.option("--media-id", default=None)
+@click.option("--limit", "-l", type=int, default=25)
+@click.option("--json", "as_json", is_flag=True)
+def comment_list(post_id, media_id, limit, as_json):
+    """GET /{object-id}/comments — list comments on a Facebook post or Instagram media."""
+    if bool(post_id) == bool(media_id):
+        raise SystemExit(print_error("Pass exactly one of --post-id/--media-id.", code="VALIDATION", as_json=as_json))
+    object_id = post_id or media_id
+    result = _comments.list_comments(object_id, limit=limit, as_json=as_json)
+    if as_json:
+        print_json(result)
+        return
+    rows = result.get("data", []) if isinstance(result, dict) else []
+    if not rows:
+        click.echo("  (no comments)")
+        return
+    print_table([flatten(r) for r in rows])
+    click.echo(f"\n  {len(rows)} comment(s)")
+
+
+@comment.command("reply")
+@click.option("--post-id", default=None, help="New top-level FB comment (FB only).")
+@click.option("--comment-id", default=None, help="Threaded reply (FB + IG).")
+@click.option("--message", required=True)
+@click.option("--dry-run", is_flag=True)
+@click.option("--yes", "-y", is_flag=True)
+@click.option("--json", "as_json", is_flag=True)
+def comment_reply(post_id, comment_id, message, dry_run, yes, as_json):
+    """Post a new top-level FB comment (--post-id) or a threaded reply (--comment-id)."""
+    if bool(post_id) == bool(comment_id):
+        raise SystemExit(print_error("Pass exactly one of --post-id/--comment-id.", code="VALIDATION", as_json=as_json))
+
+    if not _confirm_and_log(f"reply to {post_id or comment_id}", "comment reply", dry_run, yes):
+        return
+    try:
+        result = _comments.reply_comment(post_id=post_id, comment_id=comment_id, message=message, as_json=as_json)
+    except ValueError as e:
+        raise SystemExit(print_error(str(e), code="VALIDATION", as_json=as_json))
+    new_id = result.get("id", "") if isinstance(result, dict) else ""
+    _auto_log("comment_reply", f"{post_id or comment_id}", campaign_id=new_id)
+    if as_json:
+        print_json(result)
+        return
+    click.secho(f"✓ Posted comment → id {new_id or '?'}", fg="green")
+
+
+@comment.command("hide")
+@click.argument("comment_id")
+@click.option("--unhide", is_flag=True, help="Unhide instead of hide.")
+@click.option("--dry-run", is_flag=True)
+@click.option("--yes", "-y", is_flag=True)
+@click.option("--json", "as_json", is_flag=True)
+def comment_hide(comment_id, unhide, dry_run, yes, as_json):
+    """POST /{comment-id} with is_hidden — hide or unhide a comment."""
+    action = "unhide" if unhide else "hide"
+    if not _confirm_and_log(f"{action} comment {comment_id}", f"comment {action}", dry_run, yes):
+        return
+    result = _comments.hide_comment(comment_id, hide=not unhide, as_json=as_json)
+    _auto_log(f"comment_{action}", comment_id, campaign_id=comment_id)
+    if as_json:
+        print_json(result)
+        return
+    click.secho(f"✓ {'Unhid' if unhide else 'Hid'} comment {comment_id}", fg="green")
+
+
+@comment.command("delete")
+@click.argument("comment_id")
+@click.option("--dry-run", is_flag=True)
+@click.option("--yes", "-y", is_flag=True)
+@click.option("--json", "as_json", is_flag=True)
+def comment_delete(comment_id, dry_run, yes, as_json):
+    """DELETE /{comment-id} — permanently delete a comment."""
+    if not _confirm_and_log(f"delete comment {comment_id}", "comment delete", dry_run, yes):
+        return
+    result = _comments.delete_comment(comment_id, as_json=as_json)
+    _auto_log("comment_delete", comment_id, campaign_id=comment_id)
+    if as_json:
+        print_json(result)
+        return
+    click.secho(f"✓ Deleted comment {comment_id}", fg="green")
+
+
+# ── Group registration (audience/commerce/capi/analyze/post/comment) ─
 cli.add_command(audience)
 cli.add_command(commerce)
 cli.add_command(capi)
 cli.add_command(analyze)
+cli.add_command(post)
+cli.add_command(comment)
 
 
 def main():

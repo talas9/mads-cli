@@ -2,6 +2,62 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-07-02
+
+### Added
+
+- **New `mads post` command group (`mads_lib/posts.py`) — Facebook Page + Instagram
+  organic content (posts/media):**
+  - `post create` — `POST /{page-id}/feed` (text/link Page post; optional
+    `--schedule-time`, 10min-30day window)
+  - `post create-ig` — 2-step Instagram publish (`POST /{ig-user-id}/media` then
+    `POST /{ig-user-id}/media_publish`); surfaces the orphaned `creation_id` in its error
+    output if the publish step fails after the container step already succeeded
+  - `post list` — `GET /{page-id}/feed` or `GET /{ig-user-id}/media`
+  - `post delete` — `DELETE /{post-id}` (Facebook only — `posts.delete_post()` refuses
+    Instagram media deletion with a clear error; not a documented Graph API operation)
+  - Also: `create_page_photo_post()`/`create_page_video_post()` library functions
+    (`POST /{page-id}/photos` / `/videos`; video scheduling window is up to ~6 months,
+    much wider than feed posts' 30-day window) — not yet exposed as separate CLI
+    subcommands.
+
+- **New `mads comment` command group (`mads_lib/comments.py`) — Facebook Page + Instagram
+  comment moderation:**
+  - `comment list` — `GET /{object-id}/comments`
+  - `comment reply` — new top-level FB comment (`--post-id`) or threaded reply
+    (`--comment-id`, works for both FB and IG — Instagram has no documented way to create
+    a brand-new top-level comment on its own media)
+  - `comment hide` / `--unhide` — `POST /{comment-id}` with `is_hidden`
+  - `comment delete` — `DELETE /{comment-id}`
+
+- **New `mads page update` command (`mads_lib/pages.py::update_page_info()`)** —
+  `POST /{page-id}` to update `about`/`phone`/`website`/`hours`/`description`
+  (`pages_manage_metadata`, partial-update semantics — only fields explicitly given are
+  sent).
+
+- **Refactor: promoted the Page Access Token cache/retry-on-190 helper out of
+  `pages.py`'s `_insights_request_with_retry()` into a shared
+  `mads_lib/auth.py::graph_request_with_page_token()`** — used by every new
+  page-token-scoped call above (posts/comments/page-update) as well as the pre-existing
+  `page insights`, eliminating duplicated cache/retry logic. No behavior change for
+  existing `page insights`/`page info`.
+
+- **6 new OAuth scopes added to `generate_token.py`'s `SCOPES`** for the above:
+  `pages_manage_posts`, `pages_manage_engagement`, `pages_manage_metadata`,
+  `instagram_basic`, `instagram_content_publish`, `instagram_manage_comments`. **Not yet
+  granted on the live Talas token** — confirmed via `GET /me/permissions` (same class of
+  gap as the pre-existing `catalog_management` blocker). Live `post`/`comment`/`page
+  update` commands will fail with a permission error until a human re-runs
+  `python generate_token.py` (interactive OAuth re-consent) and clears any required Meta
+  App Review. See AGENTS.md Known Gotchas for the full remediation steps.
+
+### Notes
+
+- No Talas business-rules/content-compliance validation (Arabic-authorship gating,
+  `?branch=` checks, etc.) was added to mads-cli for this feature — per design, that
+  logic stays entirely in the separate `adops-manager` repo; mads-cli only enforces
+  structural validation (mutually-exclusive flags, required fields, valid enum values).
+
 ## [0.2.0] - 2026-07-02
 
 ### Added

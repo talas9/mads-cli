@@ -60,15 +60,15 @@ Confirmed against kb/graph-api.md ("Pages" section):
     re-fetching developers.facebook.com/docs/graph-api/reference/page/ratings/ live and
     confirming the situation has actually changed.
 """
-import contextlib
-import io
-import sys
+import json
 
 import click
 
-from .auth import get_page_access_token
+from .auth import graph_request_with_page_token
+from .db import get_db
 from .http import graph_request
-from .output import EXIT_CODES, print_json, print_table, print_error, flatten
+from .output import print_json, print_table, print_error, flatten
+from .timeutil import now_local
 
 # Metrics confirmed dead for every API version as of 2026-06-15 (graph-api.md, "DEPRECATED
 # as of June 15, 2026" table) — pre-flight-blocked below instead of sent to the API.
@@ -168,27 +168,43 @@ def page_info(page_id, fields, as_json):
     print_table([flatten(result)])
 
 
-def _insights_request_with_retry(page_id, params, as_json):
-    """Call GET /{page_id}/insights with the cached Page Access Token first; if it turns
-    out to have been invalidated out-of-band (error 190, AUTH), retry exactly once with a
-    freshly-fetched token. The optimistic first attempt's stdout/stderr are buffered
-    (`graph_request` prints its own error directly rather than raising a message-bearing
-    exception) so a successful retry never leaves a stray printed error behind — and if
-    the first attempt fails for a *non*-AUTH reason, or the retry also fails, the buffered
-    output is replayed so no real error is ever silently swallowed.
-    """
-    page_token = get_page_access_token(page_id)
-    out_buf, err_buf = io.StringIO(), io.StringIO()
+def _confirm_and_log(action, details, dry_run=False, yes=False):
+    if dry_run:
+        click.secho(f"  DRY RUN: {action} — {details}", fg="yellow")
+        return False
+    if not yes:
+        click.confirm(f"  Execute: {action}?", abort=True)
+    return True
+
+
+def _auto_log(action, details, campaign_name="", campaign_id=""):
+    """Best-effort changelog write; never raises (mirrors mads_lib.cli._auto_log /
+    mads_lib.creatives._auto_log — duplicated per resource-group module, see
+    creatives.py's module docstring)."""
     try:
-        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
-            return graph_request("GET", f"{page_id}/insights", params=params, token=page_token, as_json=as_json)
-    except SystemExit as exc:
-        if exc.code == EXIT_CODES["AUTH"]:
-            page_token = get_page_access_token(page_id, force_refresh=True)
-            return graph_request("GET", f"{page_id}/insights", params=params, token=page_token, as_json=as_json)
-        sys.stdout.write(out_buf.getvalue())
-        sys.stderr.write(err_buf.getvalue())
-        raise
+        conn = get_db()
+        ts = now_local()
+        raw = {
+            "timestamp": ts, "action": action, "details": details,
+            "campaign": campaign_name, "campaign_id": campaign_id, "agent": "mads-cli",
+        }
+        conn.execute(
+            "INSERT INTO changelog (timestamp, action, campaign, campaign_id, details, "
+            "reason, agent, snapshot_ref, script, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", json.dumps(raw)),
+        )
+        conn.commit()
+        conn.close()
+    except (Exception, SystemExit):
+        pass
+
+
+def _insights_request_with_retry(page_id, params, as_json):
+    """Call GET /{page_id}/insights via the shared Page Access Token cache/retry helper
+    (`auth.graph_request_with_page_token()`, promoted from this function's original
+    implementation — see its docstring for the full cache/retry-on-190 rationale).
+    """
+    return graph_request_with_page_token(page_id, "GET", f"{page_id}/insights", params=params, as_json=as_json)
 
 
 @page.command("insights")
@@ -226,3 +242,81 @@ def page_insights(page_id, metric, period, since, until, as_json):
         print_json(result)
         return
     print_table([flatten(r) for r in rows]) if rows else print_json(result)
+
+
+def update_page_info(page_id, about=None, phone=None, website=None, hours=None,
+                      description=None, as_json=False):
+    """POST /{page-id} — update Page profile fields.
+
+    Permission: `pages_manage_metadata` — not previously requested by this CLI (added to
+    `generate_token.py`'s SCOPES alongside the `post`/`comment` command groups; see
+    AGENTS.md Known Gotchas for the current permission-grant status). Only the fields
+    explicitly given are sent — Meta's POST /{page-id} is a partial-update, not a
+    full-replace, so omitted fields are left untouched server-side.
+
+    Routed through the same Page Access Token mechanism as `page insights`
+    (`auth.graph_request_with_page_token()`) — editing Page metadata, like reading Page
+    Insights, requires a Page Access Token rather than the general user/system-user token.
+
+    `hours` — Page opening hours — must already be shaped to Meta's documented format (a
+    flat dict keyed `"{day_index}_{open|close}_time"` for day_index 0=Monday..6=Sunday,
+    e.g. `{"1_open_time": "09:00", "1_close_time": "17:00"}` for Tuesday); this function
+    passes it through as given rather than reshaping/validating it.
+    """
+    body = {}
+    if about is not None:
+        body["about"] = about
+    if phone is not None:
+        body["phone"] = phone
+    if website is not None:
+        body["website"] = website
+    if hours is not None:
+        body["hours"] = hours
+    if description is not None:
+        body["description"] = description
+    if not body:
+        raise ValueError(
+            "update_page_info: at least one of about/phone/website/hours/description is required."
+        )
+    return graph_request_with_page_token(page_id, "POST", page_id, json_body=body, as_json=as_json)
+
+
+@page.command("update")
+@click.argument("page_id")
+@click.option("--about", default=None)
+@click.option("--phone", default=None)
+@click.option("--website", default=None)
+@click.option("--hours-json", default=None, help='JSON object, e.g. {"1_open_time": "09:00", "1_close_time": "17:00"}.')
+@click.option("--description", default=None)
+@click.option("--dry-run", is_flag=True)
+@click.option("--yes", "-y", is_flag=True)
+@click.option("--json", "as_json", is_flag=True)
+def page_update(page_id, about, phone, website, hours_json, description, dry_run, yes, as_json):
+    """POST /{page_id} — update Page profile fields (about/phone/website/hours/description).
+
+    Requires `pages_manage_metadata` — see AGENTS.md Known Gotchas for the current
+    permission-grant status on this account before expecting this to succeed live.
+    """
+    hours = None
+    if hours_json:
+        try:
+            hours = json.loads(hours_json)
+        except json.JSONDecodeError as e:
+            raise SystemExit(print_error(f"--hours-json is not valid JSON: {e}", code="VALIDATION", as_json=as_json))
+    if about is None and phone is None and website is None and hours is None and description is None:
+        raise SystemExit(print_error(
+            "At least one of --about/--phone/--website/--hours-json/--description is required.",
+            code="VALIDATION", as_json=as_json,
+        ))
+
+    if not _confirm_and_log(f"update page {page_id}", "page update", dry_run, yes):
+        return
+    result = update_page_info(
+        page_id, about=about, phone=phone, website=website, hours=hours,
+        description=description, as_json=as_json,
+    )
+    _auto_log("page_update", f"page {page_id}", campaign_id=page_id)
+    if as_json:
+        print_json(result)
+        return
+    click.secho(f"✓ Updated page {page_id}", fg="green")
