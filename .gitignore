@@ -12,6 +12,7 @@ build/
 credentials/
 *.json
 !pyproject.toml
+!kb/manifest.json
 
 # OS
 .DS_Store
