@@ -51,8 +51,8 @@ into the JSON error object.
 
 ## Command Taxonomy
 
-Verified by walking the live Click tree (`mads catalog`) — **82 commands** across 15 groups plus
-top-level core commands.
+Verified by walking the live Click tree (`mads catalog`) — **89 commands** across 16 groups (15
+resource groups plus Core).
 
 | Group | Commands | Description |
 |-------|----------|-------------|
@@ -71,6 +71,7 @@ top-level core commands.
 | **Commerce** | `commerce create-catalog`, `create-feed`, `upload-feed`, `create-product`, `list-products`, `batch-update`, `batch-status` | Commerce Manager: ProductCatalog/ProductFeed/ProductItem CRUD + Catalog Batch API |
 | **CAPI** | `capi create-pixel`, `create-dataset`, `list-pixels`, `send-event`, `test-event`, `hash-user-data` | Conversions API pixel/dataset management, server-side event send, local PII hashing utility |
 | **Analyze** | `analyze audit`, `budget-pacing`, `creative-fatigue`, `audience-overlap`, `placement-breakdown` | Read-only analysis (mirrors gads-cli's `analyze` group) — none of these mutate the account |
+| **WhatsApp** | `whatsapp waba info/phone-numbers`, `phone-number info`, `template list/create`, `send`, `webhook subscribe` | WhatsApp Business Platform (Cloud API) — a **separate Meta product** from the Marketing/Graph API surface above; **not yet onboarded for Talas** (no WABA — see Known Gotchas #6) |
 
 > Note: `auth system-user`/`auth token` and `business system-user`/`business token` both exist
 > and call the same Business Manager System User endpoints (`POST/GET {business_id}/system_users`,
@@ -169,6 +170,30 @@ environment or every single API call fails with a clear error, not just token-re
 query language — `mads query --node act_123/campaigns --fields id,name,status` is a thin builder
 around the shared node/edge/fields/filtering shape every Marketing API GET request uses, not a
 query-language interpreter.
+
+**6. `commerce` catalog commands are blocked until the app is granted `catalog_management`.**
+Every `commerce create-catalog`/`create-feed`/`upload-feed`/`create-product`/`list-products`/
+`batch-update`/`batch-status` call against a catalog will fail with `(#100) This application has
+not been approved to use this api` — Meta's app-approval-gate wording, distinct from a plain
+`(#200)` permissions error — because `generate_token.py`'s `SCOPES` list has `catalog_management`
+commented out (never requested/granted; confirmed live 2026-07-02 via `GET /me/permissions`,
+which returned `business_management` but not `catalog_management`). `business_management` being
+granted does **not** substitute for it. Fix is an App Dashboard action only the account owner can
+perform (App Review → request the `catalog_management` permission, then uncomment it in
+`generate_token.py` and re-auth) — not fixable via any API call. See `kb/commerce-catalog.md`
+Gotchas #13 for the full remediation steps.
+
+**7. WhatsApp Business Platform commands require a WABA that does not exist yet for Talas.**
+Every `whatsapp waba`/`phone-number`/`template`/`send` command needs `META_WABA_ID` (or
+`--waba-id`) — a WhatsApp Business Account onboarded via Meta's Embedded Signup or a
+Tech/Solution-Provider-mediated "coexistence" migration of an existing number onto the Cloud API.
+This is an account-level, Meta-eligibility-gated prerequisite that **cannot be completed by
+writing code**; none of Talas's 3 branch numbers (QZ3, IND4, SJA) have been migrated yet. Every
+command in `mads_lib/whatsapp.py` fails gracefully with a VALIDATION error
+(`META_WABA_ID is not set`) rather than crashing when this prerequisite is missing.
+`whatsapp webhook subscribe` additionally requires `META_APP_ID`/`META_APP_SECRET` (it uses an
+App Access Token — `app_id|app_secret` — not the general user/system-user token this CLI uses
+elsewhere). See `kb/whatsapp-business-platform.md` for full detail.
 
 ## KB Version Drift Rule
 

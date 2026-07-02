@@ -71,6 +71,13 @@ SCOPES = [
     # granted-permissions list). See kb/commerce-catalog.md Gotchas #13 for
     # the full manual remediation steps; this is an App Dashboard action only
     # the account owner can perform, not fixable via the API alone.
+    # "whatsapp_business_management",  # UNCOMMENT once a WhatsApp Business
+    # "whatsapp_business_messaging",   # Account (WABA) is onboarded for this
+    # app via Meta's Embedded Signup or Tech/Solution-Provider-mediated
+    # "coexistence" migration of an existing number onto the Cloud API — an
+    # account-level, Meta-eligibility-gated prerequisite this repo cannot
+    # complete for you. No WABA is onboarded for Talas yet (added 2026-07-02
+    # alongside mads_lib/whatsapp.py). See kb/whatsapp-business-platform.md.
 ]
 
 TOKEN_OUTPUT = CREDENTIALS_DIR / "meta-oauth.json"

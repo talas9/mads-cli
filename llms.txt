@@ -1,6 +1,6 @@
 # mads CLI
 
-A Meta (Facebook/Instagram) Ads CLI built for agent-driven automation.
+A Meta (Facebook/Instagram/WhatsApp) Ads CLI built for agent-driven automation.
 
 ## Discovery
 
@@ -16,16 +16,24 @@ A Meta (Facebook/Instagram) Ads CLI built for agent-driven automation.
 
 ## Quick facts
 
-- 59 commands across 11 groups (Core, Auth, Campaign, Ad Set, Ad, Creative, Insights, A/B Test,
-  Business, Page, Webhook) — verified via live Click-tree walk.
+- 89 commands across 16 groups (Core, Auth, Campaign, Ad Set, Ad, Creative, Insights, A/B Test,
+  Business, Page, Webhook, Audience, Commerce, CAPI, Analyze, WhatsApp) — verified via live
+  Click-tree walk.
+- WhatsApp Business Platform (`mads whatsapp waba/phone-number/template/send/webhook`) is a
+  SEPARATE Meta product from the Marketing/Graph API surface above — not yet onboarded for Talas
+  (no WABA; `META_WABA_ID` unset). Commands fail gracefully with a VALIDATION error, not a crash.
+- Instagram: `creative create --instagram-user-id` (creative attribution) and
+  `adset create --publisher-platforms/--instagram-positions` (placement targeting).
 - Page reviews/reply-review: does not exist and never will — Meta's ratings API returns error
   code 12 on every version; no reply endpoint has ever existed.
+- `page insights` requires a Page Access Token (auto-fetched/cached, distinct from the general
+  user/system-user token) — see `auth.py::get_page_access_token()`.
+- `commerce` catalog commands are blocked pending `catalog_management` app approval (App
+  Dashboard action only, not fixable via API) — see AGENTS.md Known Gotchas.
 - Webhooks: exactly 5 fixed trigger fields, not general change-detection.
 - Batch mutate: hard 50-operation limit, enforced client-side.
 - Every authenticated call requires `appsecret_proof` (HMAC-SHA256 of the access token, keyed by
   `META_APP_SECRET`) — set it or every API call fails.
-- `audiences.py`, `commerce.py`, `capi.py`, `analyze/*` are library-only — no CLI commands wrap
-  them yet.
 
 ## Account
 

@@ -1,8 +1,10 @@
 # mads-cli
 
-**Meta (Facebook/Instagram) Ads CLI** — a unified command-line tool for managing Meta Marketing
-API campaigns, ad sets, ads, and creatives, with built-in support for Business Manager, Ad
-Studies (A/B tests), Page insights, and ad-account webhooks.
+**Meta (Facebook/Instagram/WhatsApp) Ads CLI** — a unified command-line tool for managing Meta
+Marketing API campaigns, ad sets, ads, and creatives (with Instagram placement/attribution
+support), plus Custom/Lookalike Audiences, Commerce Manager catalogs, Conversions API, read-only
+account analysis, Business Manager, Ad Studies (A/B tests), Page insights, ad-account webhooks,
+and the WhatsApp Business Platform (Cloud API).
 
 Built for AI coding agents (Claude Code, Codex, etc.) and human operators. Every command supports
 `--json` for machine-readable output and `--help` for full documentation.
@@ -19,22 +21,28 @@ Built for AI coding agents (Claude Code, Codex, etc.) and human operators. Every
 
 ## Features
 
-**59 commands** across 11 groups (verified by walking the live Click tree), covering the Meta
-Marketing API operational surface:
+**89 commands** across 16 groups (15 resource groups plus Core; verified by walking the live
+Click tree), covering the Meta Marketing API, Conversions API, Commerce Manager, and WhatsApp
+Business Platform operational surface:
 
 | Group | Commands | Description |
 |-------|----------|-------------|
 | **Core** | `query`, `doctor`, `log`, `snapshot`, `mutate`, `batch-mutate`, `catalog`, `db`, `changelog`, `decisions`, `milestones` | Generic Graph API GET builder, readiness check, structured logs, history-DB passthrough, machine-readable command catalog |
 | **Auth** | `auth status`, `login`, `revoke`, `test`, `system-user create/list`, `token generate/renew` | OAuth "Login for Business" flow, credential diagnostics, Business Manager System User + access-token management |
 | **Campaign** | `campaign list`, `create`, `status`, `budget`, `delete` | Campaign CRUD — objective, special ad categories, buying type, bid strategy, budget |
-| **Ad Set** | `adset list`, `create`, `status`, `budget`, `delete` | Ad Set CRUD — billing event, optimization goal, bid strategy, targeting (countries/age), pixel/custom-event promoted object |
+| **Ad Set** | `adset list`, `create`, `status`, `budget`, `delete` | Ad Set CRUD — billing event, optimization goal, bid strategy, targeting (countries/age/placements/positions), pixel/custom-event promoted object |
 | **Ad** | `ad list`, `create`, `status`, `budget`, `delete` | Ad CRUD — creative attach by id or inline spec |
-| **Creative** | `creative create`, `upload-image`, `upload-video` | AdCreative construction (link/image or video), binary asset upload |
+| **Creative** | `creative create`, `upload-image`, `upload-video` | AdCreative construction (link/image or video, Instagram user attribution), binary asset upload |
 | **Insights** | `insights campaign`, `adset`, `ad`, `async-submit`, `async-status`, `async-fetch` | Synchronous Insights at all 3 levels + async long-running report jobs |
 | **A/B Test** | `abtest create`, `list`, `status` | Ad Studies (split test) management |
 | **Business** | `business info`, `adaccounts`, `pages`, `users`, `system-user create/list`, `token generate/renew` | Business Manager account/page/user listing + System User + token management |
-| **Page** | `page info`, `insights` | Page profile + organic Page/Post Insights — **no reviews** (see Known Gotchas in [AGENTS.md](AGENTS.md)) |
+| **Page** | `page info`, `insights` | Page profile + organic Page/Post Insights (Page Access Token auto-fetched/cached) — **no reviews** (see Known Gotchas in [AGENTS.md](AGENTS.md)) |
 | **Webhook** | `webhook subscribe`, `list`, `unsubscribe` | Ad-account webhook subscriptions — **5 fixed triggers only**, not general change-detection |
+| **Audience** | `audience list`, `create`, `create-lookalike`, `upload-users`, `delete` | Custom/Lookalike Audience CRUD + hashed-PII user upload |
+| **Commerce** | `commerce create-catalog`, `create-feed`, `upload-feed`, `create-product`, `list-products`, `batch-update`, `batch-status` | Commerce Manager: ProductCatalog/ProductFeed/ProductItem CRUD + Catalog Batch API — **blocked pending `catalog_management` app approval** (see Known Gotchas in [AGENTS.md](AGENTS.md)) |
+| **CAPI** | `capi create-pixel`, `create-dataset`, `list-pixels`, `send-event`, `test-event`, `hash-user-data` | Conversions API pixel/dataset management, server-side event send, local PII hashing utility |
+| **Analyze** | `analyze audit`, `budget-pacing`, `creative-fatigue`, `audience-overlap`, `placement-breakdown` | Read-only account analysis — none of these mutate the account |
+| **WhatsApp** | `whatsapp waba info/phone-numbers`, `phone-number info`, `template list/create`, `send`, `webhook subscribe` | WhatsApp Business Platform (Cloud API) — a separate Meta product; **not yet onboarded for Talas** (no WABA — see Known Gotchas in [AGENTS.md](AGENTS.md)) |
 
 **Cross-cutting:**
 - `--json` on every command for machine-readable output
@@ -42,16 +50,10 @@ Marketing API operational surface:
 - `--dry-run` and `--yes` on all mutation commands
 - Auto-logging to changelog after successful mutations
 - Scope-aware config — auto-detects project (`./`) vs global (`~/.config/mads/`)
-- Structured error envelope + 8 stable exit codes (0-7 shared with gads-cli, plus mads-specific
+- Structured error envelope + 9 stable exit codes (0-7 shared with gads-cli, plus mads-specific
   `RATE_LIMIT=8` for Meta's rate-limit error codes)
 - Configurable timezone (IANA) and currency (ISO 4217)
 - `doctor` reports a `sibling_cli` field — detects `gads` (gads-cli) on PATH
-
-**Library-only, not yet wired to the CLI** (functions exist, no Click commands yet — see
-[AGENTS.md](AGENTS.md) for the full list): Custom/Lookalike Audiences (`mads_lib/audiences.py`),
-Commerce Catalog (`mads_lib/commerce.py`), Conversions API (`mads_lib/capi.py`), and 5 analysis
-modules (`mads_lib/analyze/`: audit, budget pacing, creative fatigue, audience overlap, placement
-breakdown).
 
 ---
 
@@ -215,6 +217,24 @@ mads webhook unsubscribe --account-id act_1234567890
 > Only 5 fixed trigger fields (`with_issues_ad_objects`, `in_process_ad_objects`,
 > `ad_recommendations`, `creative_fatigue`, `product_set_issue`) — not general change-detection.
 
+### WhatsApp Business Platform
+
+```bash
+mads whatsapp waba info --waba-id <waba_id>
+mads whatsapp waba phone-numbers --waba-id <waba_id>
+mads whatsapp phone-number info <phone_number_id>
+mads whatsapp template list --waba-id <waba_id>
+mads whatsapp template create my_template UTILITY en_US \
+    '[{"type":"BODY","text":"Your order {{1}} has shipped."}]'
+mads whatsapp send <phone_number_id> <to_e164> --template-name my_template
+mads whatsapp webhook subscribe --callback-url https://example.com/webhook --verify-token <secret>
+```
+
+> A **separate Meta product** from the Marketing/Graph API surface above — not yet onboarded for
+> Talas (no WhatsApp Business Account/WABA; `META_WABA_ID` unset). Every command needing a WABA
+> fails gracefully with a VALIDATION error, not a crash. See [AGENTS.md](AGENTS.md) Known Gotchas
+> and [`kb/whatsapp-business-platform.md`](kb/whatsapp-business-platform.md).
+
 ### Generic Mutations (escape hatch)
 
 ```bash
@@ -236,12 +256,14 @@ All configuration via environment variables or a `.env` file at the scope root.
 | `META_APP_SECRET` | **All commands** | Meta App Secret — used to compute `appsecret_proof` on every call |
 | `META_AD_ACCOUNT_ID` | Campaign/Ad Set/Ad/Creative/Insights/Webhook commands | Ad account ID (`act_` prefix auto-added if missing) |
 | `META_BUSINESS_ID` | Business Manager + Ad Studies commands | Business Manager (Business Manager ID) |
+| `META_WABA_ID` | WhatsApp commands (`waba`, `template`, some `send`) | WhatsApp Business Account ID — requires WABA onboarding (not yet done for Talas; see [AGENTS.md](AGENTS.md) Known Gotchas) |
 | `META_API_VERSION` | Optional (default: `v25.0`) | Graph/Marketing API version |
 | `MADS_TIMEZONE` | Optional (default: `UTC`) | IANA timezone (e.g. `Asia/Dubai`) |
 | `MADS_CURRENCY` | Optional (default: `USD`) | ISO 4217 code (e.g. `AED`, `EUR`) |
 | `MADS_PROJECT_ROOT` | Optional | Force project-scope config to a specific directory |
 | `MADS_DB_PATH` | Optional | Override the local SQLite history DB path |
 | `MADS_CREDENTIALS_PATH` | Optional | Override the OAuth token file path (default: `credentials/meta-oauth.json`) |
+| `MADS_PAGE_TOKENS_PATH` | Optional | Override the Page Access Token cache path (default: `credentials/meta-page-tokens.json`) — `page insights` needs a Page Access Token, distinct from the general user/system-user token |
 | `MADS_SNAPSHOTS_DIR` | Optional | Override the snapshot output directory |
 
 ### Scope detection
@@ -252,7 +274,11 @@ All configuration via environment variables or a `.env` file at the scope root.
 
 ### OAuth scopes requested by `generate_token.py` / `mads auth login`
 
-`ads_management`, `business_management`, `pages_read_engagement`, `pages_manage_metadata`
+`ads_management`, `ads_read`, `business_management`, `pages_read_engagement`, `pages_show_list`
+
+`catalog_management` and the WhatsApp scopes (`whatsapp_business_management`,
+`whatsapp_business_messaging`) are prepared but commented out in `generate_token.py` pending
+Meta App Review approval / WABA onboarding — see [AGENTS.md](AGENTS.md) Known Gotchas.
 
 ---
 
@@ -264,9 +290,9 @@ mads-cli/
 ├── mads.sh                # Shell wrapper with .env loading
 ├── mads_lib/
 │   ├── __init__.py        # Version + public API exports
-│   ├── cli.py             # Root Click group + core commands (59 commands total)
+│   ├── cli.py             # Root Click group + core commands + audience/commerce/capi/analyze groups (89 commands total)
 │   ├── config.py          # Scope-aware env config
-│   ├── auth.py            # Access-token loading + appsecret_proof HMAC
+│   ├── auth.py            # Access-token loading + appsecret_proof HMAC + Page Access Token cache
 │   ├── http.py            # Graph API request/batch wrapper + Meta error classifier
 │   ├── db.py              # SQLite connection manager
 │   ├── dbread.py          # SELECT-only history-DB passthrough
@@ -274,21 +300,21 @@ mads-cli/
 │   ├── timeutil.py        # Timezone-aware helpers
 │   ├── catalog.py         # Live Click-tree catalog emitter
 │   ├── campaigns.py       # campaign group: list/create/status/budget/delete
-│   ├── adsets.py          # adset group: list/create/status/budget/delete
+│   ├── adsets.py          # adset group: list/create/status/budget/delete (+ Instagram placement targeting flags)
 │   ├── ads.py             # ad group: list/create/status/budget/delete
-│   ├── creatives.py       # creative group: create/upload-image/upload-video
+│   ├── creatives.py       # creative group: create/upload-image/upload-video (+ Instagram user attribution)
 │   ├── insights.py        # insights group: campaign/adset/ad + async report jobs
 │   ├── abtest.py          # abtest group: create/list/status (Ad Studies)
 │   ├── business.py        # business group: info/adaccounts/pages/users/system-user/token
-│   ├── pages.py           # page group: info/insights (NO reviews — see AGENTS.md Gotchas)
+│   ├── pages.py           # page group: info/insights — Page Access Token required (NO reviews — see AGENTS.md Gotchas)
 │   ├── webhooks.py        # webhook group: subscribe/list/unsubscribe (5-trigger only)
-│   ├── audiences.py       # library only — Custom/Lookalike Audience functions (no CLI yet)
-│   ├── commerce.py        # library only — Catalog/Product functions (no CLI yet)
-│   ├── capi.py            # library only — Conversions API functions (no CLI yet)
-│   └── analyze/           # library only — audit/budget_pacing/creative_fatigue/
-│                          #   audience_overlap/placement_breakdown (no CLI yet)
-├── kb/                    # API knowledge base (4 md files + INDEX.md + manifest.json)
-├── tests/                 # offline/CI-safe pytest suite (96 tests)
+│   ├── audiences.py       # audience group: list/create/create-lookalike/upload-users/delete
+│   ├── commerce.py        # commerce group: create-catalog/create-feed/upload-feed/create-product/list-products/batch-update/batch-status
+│   ├── capi.py            # capi group: create-pixel/create-dataset/list-pixels/send-event/test-event/hash-user-data
+│   ├── analyze/           # analyze group: audit/budget_pacing/creative_fatigue/audience_overlap/placement_breakdown
+│   └── whatsapp.py        # whatsapp group: waba/phone-number/template/send/webhook (WhatsApp Business Platform — separate Meta product, not yet onboarded for Talas)
+├── kb/                    # API knowledge base (5 md files + INDEX.md + manifest.json)
+├── tests/                 # offline/CI-safe pytest suite (163 tests: test_mads.py + test_whatsapp.py)
 ├── generate_token.py      # OAuth "Login for Business" token generator
 ├── scripts/install.sh     # Interactive installer
 ├── pyproject.toml         # Package metadata
