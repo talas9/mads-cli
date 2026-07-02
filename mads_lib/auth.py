@@ -15,7 +15,7 @@ import json
 
 import click
 
-from .config import APP_SECRET, CREDS_PATH
+from .config import APP_SECRET, CREDS_PATH, PAGE_TOKENS_PATH
 
 
 def get_access_token():
@@ -66,3 +66,100 @@ def get_appsecret_proof(token=None):
         msg=token.encode("utf-8"),
         digestmod=hashlib.sha256,
     ).hexdigest()
+
+
+def _load_page_token_cache():
+    """Load the on-disk Page Access Token cache ({page_id: access_token}).
+
+    Returns an empty dict if the file is missing, empty, or malformed — the
+    cache is a best-effort optimization, not a source of truth (the source of
+    truth is `GET /me/accounts`), so a corrupt cache file should never be
+    fatal.
+    """
+    if not PAGE_TOKENS_PATH.exists():
+        return {}
+    try:
+        with open(PAGE_TOKENS_PATH) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def get_page_access_token(page_id, user_token=None, force_refresh=False):
+    """Return a Page Access Token for `page_id`, fetching + caching it if needed.
+
+    Why this exists: page-scoped Graph API calls — notably `GET
+    /{page-id}/insights` — require a *Page* Access Token, not the general
+    user/system-user token loaded by `get_access_token()`. Passing the wrong
+    kind of token gets you Meta error code 190, "This method must be called
+    with a Page Access Token" (distinct from 190's more common meaning of an
+    expired/invalid token). `GET /{page-id}` (Page profile info) does *not*
+    need a Page token — only page-scoped edges like `/insights` do — so
+    `mads_lib/pages.py::page_info` deliberately keeps using the general
+    token; only `page_insights` calls this function.
+
+    A Page Access Token is obtained via `GET /me/accounts` (returns each
+    Page the calling user manages, plus a page-scoped `access_token` for
+    each), authenticated with the *user* token from `MADS_CREDENTIALS_PATH`.
+
+    Caching rationale — verified live (2026-07-02) by running Meta's
+    `GET /debug_token` against a freshly-issued Page Access Token: the
+    response showed `expires_at: 0`, which per Meta's convention means the
+    token does not expire. This holds even though the *user* token it was
+    derived from is a 60-day token (has a real `expires_at`) — Page Access
+    Tokens obtained from a Business "Login for Business" user token get
+    their own long-lived/non-expiring lifetime, independent of the parent
+    user token's expiry. Because of that, caching this token to disk (rather
+    than re-fetching it via `/me/accounts` on every single Page-scoped call)
+    is correct and safe, mirroring how `get_access_token()` treats the main
+    credentials file. It can still be invalidated out-of-band (password
+    change, app deauthorization, the granting user's `pages_show_list`/
+    `pages_read_engagement` scope being revoked) — callers that get a 190
+    back despite a cache hit should retry once with `force_refresh=True`
+    (see `mads_lib/pages.py::page_insights` for that retry).
+
+    Cached at `PAGE_TOKENS_PATH` (default
+    `credentials/meta-page-tokens.json`, gitignored alongside the rest of
+    `credentials/`) as a flat `{page_id: access_token}` map — every Page
+    returned by `/me/accounts` is cached in the same pass, not just the one
+    requested, since the call is already paid for.
+    """
+    if not force_refresh:
+        cached = _load_page_token_cache().get(page_id)
+        if cached:
+            return cached
+
+    from .http import graph_request  # local import: http.py imports this module at load time
+
+    tok = user_token or get_access_token()
+    result = graph_request(
+        "GET", "me/accounts", params={"fields": "id,name,access_token"}, token=tok,
+    )
+    pages = result.get("data", []) if isinstance(result, dict) else []
+
+    cache = _load_page_token_cache()
+    found = None
+    for p in pages:
+        pid, ptok = p.get("id"), p.get("access_token")
+        if pid and ptok:
+            cache[pid] = ptok
+        if pid == page_id:
+            found = ptok
+
+    if found is None:
+        managed = ", ".join(f"{p.get('id')} ({p.get('name')})" for p in pages) or "(none)"
+        click.secho(
+            f"✗ No Page Access Token available for page_id {page_id} — it was not "
+            f"returned by GET /me/accounts for the current user token. Either this "
+            f"page isn't managed by that user, or the token is missing pages_show_list "
+            f"scope. Pages the current token *does* manage: {managed}",
+            fg="red", err=True,
+        )
+        raise SystemExit(1)
+
+    PAGE_TOKENS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(PAGE_TOKENS_PATH, "w") as f:
+        json.dump(cache, f, indent=2)
+
+    return found

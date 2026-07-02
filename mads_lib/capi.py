@@ -39,9 +39,24 @@ NEVER_HASH_USER_DATA_FIELDS = frozenset({
 
 # KB: kb/conversions-api.md § "Pixel / Dataset Creation — Full Walkthrough" — Notable
 # AdsPixel fields (from the SDK `Field` enum), trimmed to the most commonly useful.
+#
+# `owner_ad_account` is deliberately EXCLUDED from the default set. Root-caused
+# 2026-07-02 (session investigating a `capi list-pixels` AUTH failure): this
+# sub-object expansion requires ads_management/ads_read on the pixel's *actual*
+# owning ad account — which, for pixels created via a third-party channel
+# (e.g. Shopify's Facebook & Instagram sales channel) or migrated/legacy
+# pixels, can be an ad account entirely outside the caller's Business Manager
+# and never assigned to the caller at all. When that happens Meta returns
+# `(#200) Ad account owner has NOT grant ads_management or ads_read
+# permission` for the WHOLE list-pixels call, even though every other field
+# (including `owner_business`) resolves fine and the caller has full
+# DRAFT/ANALYZE/ADVERTISE/MANAGE tasks on the ad account being queried. See
+# kb/graph-api.md Gotchas for the full verified trace. Callers who need
+# `owner_ad_account` for a specific known-good pixel can still request it
+# explicitly via `--fields`.
 DEFAULT_PIXEL_FIELDS = (
     "id,name,creation_time,is_consolidated_container,last_fired_time,"
-    "match_rate_approx,owner_ad_account,owner_business,data_use_setting"
+    "match_rate_approx,owner_business,data_use_setting"
 )
 
 

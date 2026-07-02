@@ -16,7 +16,9 @@ Confirmed against kb/graph-api.md ("Pages" section):
   - GET /{page-id}/insights — organic Page/Post Insights. Hard limits (doc-confirmed):
     requires 100+ Page likes before most metrics populate; most metrics refresh once every
     24h; only the last 2 years of data is retained/queryable; max 90-day `since`/`until`
-    window per request.
+    window per request. **Requires a Page Access Token, not the general user/system-user
+    token** — see get_page_access_token() below for why, and kb/graph-api.md's Gotcha #12
+    for the full live verification.
 
   - DEPRECATED as of 2026-06-15, already live for every API version as of this KB's
     2026-07-01 fetch date (graph-api.md, "DEPRECATED as of June 15, 2026" table):
@@ -29,6 +31,15 @@ Confirmed against kb/graph-api.md ("Pages" section):
     replacement for the 10s family). This module pre-flight-rejects any of these with a
     clear VALIDATION error (naming the confirmed replacement metric where one exists)
     instead of letting the call fail opaquely against a dead metric.
+
+  - ALSO CONFIRMED DEAD by live testing on 2026-07-02 (error #100 "not a valid insights
+    metric", using a real Page Access Token — not a token-type confusion): page_impressions,
+    page_fans, page_fan_adds, page_fan_adds_unique, page_fan_removes, page_fans_locale,
+    page_fans_city, page_fans_country, page_impressions_paid, page_impressions_viral,
+    page_impressions_nonviral, page_engaged_users. None of these were in graph-api.md's
+    originally-documented June 15, 2026 deprecation table — that table (and the KB's
+    "current metrics" table) was stale/wrong for these. See CONFIRMED_DEAD_NO_REPLACEMENT
+    below and kb/graph-api.md's corrected metrics tables.
 
   - Reviews/Recommendations — CONFIRMED DEAD, do not resurrect this:
     `GET /{page-id}/ratings` and `GET /{recommendation-id}` return error code 12 on
@@ -49,10 +60,15 @@ Confirmed against kb/graph-api.md ("Pages" section):
     re-fetching developers.facebook.com/docs/graph-api/reference/page/ratings/ live and
     confirming the situation has actually changed.
 """
+import contextlib
+import io
+import sys
+
 import click
 
+from .auth import get_page_access_token
 from .http import graph_request
-from .output import print_json, print_table, print_error, flatten
+from .output import EXIT_CODES, print_json, print_table, print_error, flatten
 
 # Metrics confirmed dead for every API version as of 2026-06-15 (graph-api.md, "DEPRECATED
 # as of June 15, 2026" table) — pre-flight-blocked below instead of sent to the API.
@@ -68,10 +84,37 @@ DEPRECATED_METRIC_REPLACEMENTS = {
     "post_impressions_nonviral_unique": "post_total_media_view_unique",
     "page_video_views_unique": "page_total_media_view_unique",
     "post_video_views_unique": "post_total_media_view_unique",
+    # Confirmed dead by LIVE testing against the real Meta Graph API on 2026-07-02 (GET
+    # /{page-id}/insights, error (#100) "The value must be a valid insights metric" — a
+    # distinct failure mode from "no data because <100 Page likes", which returns an empty
+    # `data: []` with no error). graph-api.md's "current (non-deprecated) metrics" table
+    # was stale/wrong in listing this one as current. Replacement follows the same
+    # impression→media-view semantic shift documented for `page_impressions_unique`.
+    "page_impressions": "page_media_view",
 }
 # The 10s-tier video-view family has no documented 1:1 replacement (graph-api.md notes this
 # explicitly) — matched by prefix rather than exact name since there are several sub-metrics.
 DEPRECATED_10S_PREFIXES = ("page_video_views_10s", "post_video_views_10s")
+
+# Also confirmed dead by the same 2026-07-02 live test (error #100, same as above), but with
+# no confirmed replacement metric found live or documented anywhere in graph-api.md — kept
+# separate from DEPRECATED_METRIC_REPLACEMENTS so the error message never invents a
+# replacement that hasn't actually been verified to work. `page_engaged_users` in particular
+# predates the June 2026 wave entirely (it's a pre-2018-era Insights metric name) and was
+# already dead independent of that deprecation.
+CONFIRMED_DEAD_NO_REPLACEMENT = (
+    "page_impressions_paid",
+    "page_impressions_viral",
+    "page_impressions_nonviral",
+    "page_fans",
+    "page_fan_adds",
+    "page_fan_adds_unique",
+    "page_fan_removes",
+    "page_fans_locale",
+    "page_fans_city",
+    "page_fans_country",
+    "page_engaged_users",
+)
 
 DEFAULT_PAGE_FIELDS = (
     "id,name,about,category,category_list,fan_count,followers_count,link,phone,website,"
@@ -81,19 +124,23 @@ DEFAULT_PAGE_FIELDS = (
 
 
 def _check_deprecated_metrics(metric_csv, as_json):
-    """Reject any metric confirmed dead as of 2026-06-15 before calling the API."""
+    """Reject any metric confirmed dead — either by graph-api.md's documented 2026-06-15
+    deprecation wave, or by live 2026-07-02 testing that found additional dead metrics the
+    KB had (incorrectly) still listed as current — before calling the API."""
     if not metric_csv:
         return
     requested = [m.strip() for m in metric_csv.split(",") if m.strip()]
     bad = []
     for m in requested:
         if m in DEPRECATED_METRIC_REPLACEMENTS:
-            bad.append(f"{m} (dead since 2026-06-15 — use {DEPRECATED_METRIC_REPLACEMENTS[m]})")
+            bad.append(f"{m} (dead — use {DEPRECATED_METRIC_REPLACEMENTS[m]})")
         elif m.startswith(DEPRECATED_10S_PREFIXES):
             bad.append(f"{m} (dead since 2026-06-15 — no documented 1:1 replacement; use the 3s or 30s tier)")
+        elif m in CONFIRMED_DEAD_NO_REPLACEMENT:
+            bad.append(f"{m} (confirmed dead by live testing on 2026-07-02 — no replacement metric confirmed; see kb/graph-api.md's current-metrics table for valid alternatives)")
     if bad:
         raise SystemExit(print_error(
-            "Requested metric(s) are dead on every API version as of 2026-06-15: " + "; ".join(bad),
+            "Requested metric(s) are dead / rejected by the Graph API: " + "; ".join(bad),
             code="VALIDATION", as_json=as_json,
         ))
 
@@ -121,6 +168,29 @@ def page_info(page_id, fields, as_json):
     print_table([flatten(result)])
 
 
+def _insights_request_with_retry(page_id, params, as_json):
+    """Call GET /{page_id}/insights with the cached Page Access Token first; if it turns
+    out to have been invalidated out-of-band (error 190, AUTH), retry exactly once with a
+    freshly-fetched token. The optimistic first attempt's stdout/stderr are buffered
+    (`graph_request` prints its own error directly rather than raising a message-bearing
+    exception) so a successful retry never leaves a stray printed error behind — and if
+    the first attempt fails for a *non*-AUTH reason, or the retry also fails, the buffered
+    output is replayed so no real error is ever silently swallowed.
+    """
+    page_token = get_page_access_token(page_id)
+    out_buf, err_buf = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+            return graph_request("GET", f"{page_id}/insights", params=params, token=page_token, as_json=as_json)
+    except SystemExit as exc:
+        if exc.code == EXIT_CODES["AUTH"]:
+            page_token = get_page_access_token(page_id, force_refresh=True)
+            return graph_request("GET", f"{page_id}/insights", params=params, token=page_token, as_json=as_json)
+        sys.stdout.write(out_buf.getvalue())
+        sys.stderr.write(err_buf.getvalue())
+        raise
+
+
 @page.command("insights")
 @click.argument("page_id")
 @click.option("--metric", required=True, help="Comma-separated metric name(s).")
@@ -131,8 +201,17 @@ def page_info(page_id, fields, as_json):
 def page_insights(page_id, metric, period, since, until, as_json):
     """GET /{page_id}/insights — organic Page/Post Insights metrics.
 
-    Pre-flight-rejects any metric confirmed dead as of 2026-06-15 (see module docstring)
-    instead of letting the call fail opaquely against the live API.
+    Pre-flight-rejects any metric confirmed dead as of 2026-06-15, or confirmed dead by
+    live 2026-07-02 testing (see module docstring), instead of letting the call fail
+    opaquely against the live API.
+
+    Unlike `page info`, this edge requires a **Page Access Token** — Meta returns error
+    190 ("This method must be called with a Page Access Token") for the general
+    user/system-user token here. `get_page_access_token()` fetches (and disk-caches) one
+    via `GET /me/accounts`; see its docstring in auth.py for why caching is safe (the
+    Page token is long-lived/non-expiring independent of the parent user token's own
+    expiry). If the cached token has been invalidated out-of-band since it was cached,
+    the call is retried exactly once with a freshly-fetched token before giving up.
     """
     _check_deprecated_metrics(metric, as_json)
     params = {"metric": metric, "period": period}
@@ -140,7 +219,8 @@ def page_insights(page_id, metric, period, since, until, as_json):
         params["since"] = since
     if until:
         params["until"] = until
-    result = graph_request("GET", f"{page_id}/insights", params=params, as_json=as_json)
+
+    result = _insights_request_with_retry(page_id, params, as_json)
     rows = result.get("data", []) if isinstance(result, dict) else []
     if as_json:
         print_json(result)

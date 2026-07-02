@@ -58,9 +58,19 @@ API_VERSION = os.environ.get("META_API_VERSION", "v25.0")
 
 SCOPES = [
     "ads_management",
+    "ads_read",
     "business_management",
     "pages_read_engagement",
-    "pages_manage_metadata",
+    "pages_show_list",
+    # "catalog_management",  # UNCOMMENT once the app has "Catalog Management"
+    # added under App Dashboard -> App Review -> Permissions and Features (App
+    # ID 1332295765705902). Root-caused 2026-07-02: `mads commerce`
+    # catalog endpoints fail with "(#100) This application has not been
+    # approved to use this api" because this scope was never requested/
+    # granted (confirmed via GET /me/permissions — not present in the
+    # granted-permissions list). See kb/commerce-catalog.md Gotchas #13 for
+    # the full manual remediation steps; this is an App Dashboard action only
+    # the account owner can perform, not fixable via the API alone.
 ]
 
 TOKEN_OUTPUT = CREDENTIALS_DIR / "meta-oauth.json"

@@ -22,8 +22,10 @@ import requests
 from click.testing import CliRunner
 
 import mads_lib.audiences
+import mads_lib.auth
 import mads_lib.capi
 import mads_lib.commerce
+import mads_lib.pages
 from mads_lib import __version__
 from mads_lib.cli import cli
 from mads_lib import dbread
@@ -639,3 +641,217 @@ class TestMutatePartialProgress:
         assert result.exit_code == EXIT_CODES["AUTH"]
         assert len(calls) == 2  # third op never ran
         assert "1 of 3" in result.output
+
+
+class TestGetPageAccessToken:
+    """`mads_lib.auth.get_page_access_token()` — fetch/cache a Page Access Token via
+    GET /me/accounts, distinct from the general user/system-user token. See its docstring
+    for why this exists (Meta error 190, "This method must be called with a Page Access
+    Token", on page-scoped edges like /{page-id}/insights) and why caching to disk is safe
+    (a Page Access Token derived from a valid user token was confirmed live, via
+    GET /debug_token, to report `expires_at: 0` — non-expiring — independent of the parent
+    user token's own expiry).
+    """
+
+    def _cache_path(self, tmp_path):
+        return tmp_path / "meta-page-tokens.json"
+
+    def test_cache_hit_returns_cached_token_without_any_network_call(self, monkeypatch, tmp_path):
+        cache_path = self._cache_path(tmp_path)
+        cache_path.write_text(json.dumps({"106391075531104": "cached-page-token"}))
+        monkeypatch.setattr(mads_lib.auth, "PAGE_TOKENS_PATH", cache_path)
+
+        def fail_if_called(*a, **k):
+            raise AssertionError("graph_request must not be called on a cache hit")
+
+        monkeypatch.setattr("mads_lib.http.graph_request", fail_if_called)
+
+        token = mads_lib.auth.get_page_access_token("106391075531104")
+        assert token == "cached-page-token"
+
+    def test_cache_miss_fetches_from_me_accounts_and_writes_cache(self, monkeypatch, tmp_path):
+        cache_path = self._cache_path(tmp_path)
+        assert not cache_path.exists()
+        monkeypatch.setattr(mads_lib.auth, "PAGE_TOKENS_PATH", cache_path)
+
+        calls = []
+
+        def fake_graph_request(method, path, **kwargs):
+            calls.append((method, path, kwargs.get("token")))
+            return {
+                "data": [
+                    {"id": "106391075531104", "name": "Talas Tesla Auto Parts", "access_token": "fresh-page-token"},
+                    {"id": "999", "name": "Other Page", "access_token": "other-page-token"},
+                ]
+            }
+
+        monkeypatch.setattr("mads_lib.http.graph_request", fake_graph_request)
+
+        token = mads_lib.auth.get_page_access_token("106391075531104", user_token="fake-user-token")
+
+        assert token == "fresh-page-token"
+        assert calls == [("GET", "me/accounts", "fake-user-token")]
+        # Both pages returned by /me/accounts get cached in the same pass, not just the
+        # one requested — the call is already paid for.
+        cached = json.loads(cache_path.read_text())
+        assert cached == {"106391075531104": "fresh-page-token", "999": "other-page-token"}
+
+    def test_page_not_managed_by_token_exits_1_with_clear_message(self, monkeypatch, tmp_path, capsys):
+        cache_path = self._cache_path(tmp_path)
+        monkeypatch.setattr(mads_lib.auth, "PAGE_TOKENS_PATH", cache_path)
+
+        def fake_graph_request(method, path, **kwargs):
+            return {"data": [{"id": "999", "name": "Other Page", "access_token": "other-page-token"}]}
+
+        monkeypatch.setattr("mads_lib.http.graph_request", fake_graph_request)
+
+        with pytest.raises(SystemExit) as exc_info:
+            mads_lib.auth.get_page_access_token("106391075531104", user_token="fake-user-token")
+        assert exc_info.value.code == 1
+        assert "106391075531104" in capsys.readouterr().err
+
+    def test_force_refresh_bypasses_a_stale_cache(self, monkeypatch, tmp_path):
+        cache_path = self._cache_path(tmp_path)
+        cache_path.write_text(json.dumps({"106391075531104": "stale-token"}))
+        monkeypatch.setattr(mads_lib.auth, "PAGE_TOKENS_PATH", cache_path)
+
+        def fake_graph_request(method, path, **kwargs):
+            return {"data": [{"id": "106391075531104", "name": "P", "access_token": "renewed-token"}]}
+
+        monkeypatch.setattr("mads_lib.http.graph_request", fake_graph_request)
+
+        token = mads_lib.auth.get_page_access_token(
+            "106391075531104", user_token="fake-user-token", force_refresh=True,
+        )
+        assert token == "renewed-token"
+        assert json.loads(cache_path.read_text())["106391075531104"] == "renewed-token"
+
+    def test_corrupt_cache_file_is_ignored_not_fatal(self, monkeypatch, tmp_path):
+        cache_path = self._cache_path(tmp_path)
+        cache_path.write_text("{not valid json")
+        monkeypatch.setattr(mads_lib.auth, "PAGE_TOKENS_PATH", cache_path)
+
+        def fake_graph_request(method, path, **kwargs):
+            return {"data": [{"id": "106391075531104", "name": "P", "access_token": "recovered-token"}]}
+
+        monkeypatch.setattr("mads_lib.http.graph_request", fake_graph_request)
+
+        token = mads_lib.auth.get_page_access_token("106391075531104", user_token="fake-user-token")
+        assert token == "recovered-token"
+
+
+class TestPageInsightsDeprecatedMetrics:
+    """Pre-flight metric validation in mads_lib/pages.py — both the originally-documented
+    2026-06-15 deprecation wave, and additional metrics confirmed dead by live testing
+    against the real Meta Graph API on 2026-07-02 (graph-api.md's "current metrics" table
+    had incorrectly kept listing `page_impressions`/`page_fans`/etc. as valid).
+    """
+
+    def test_rejects_metrics_confirmed_dead_by_live_2026_07_02_testing(self):
+        with pytest.raises(SystemExit) as exc_info:
+            mads_lib.pages._check_deprecated_metrics(
+                "page_impressions,page_fans,page_engaged_users", as_json=True,
+            )
+        assert exc_info.value.code == EXIT_CODES["VALIDATION"]
+
+    def test_rejects_original_2026_06_15_deprecated_metric(self):
+        with pytest.raises(SystemExit) as exc_info:
+            mads_lib.pages._check_deprecated_metrics("page_impressions_unique", as_json=True)
+        assert exc_info.value.code == EXIT_CODES["VALIDATION"]
+
+    def test_rejects_10s_video_view_family_by_prefix(self):
+        with pytest.raises(SystemExit) as exc_info:
+            mads_lib.pages._check_deprecated_metrics("page_video_views_10s_autoplayed", as_json=True)
+        assert exc_info.value.code == EXIT_CODES["VALIDATION"]
+
+    def test_allows_current_valid_metrics(self):
+        # Should not raise.
+        mads_lib.pages._check_deprecated_metrics(
+            "page_post_engagements,page_media_view,page_total_media_view_unique,page_follows",
+            as_json=True,
+        )
+
+
+class TestInsightsRequestWithRetry:
+    """`mads_lib.pages._insights_request_with_retry()` — the cache-hit-first, retry-once-on-
+    AUTH-failure wrapper around GET /{page-id}/insights.
+    """
+
+    def test_success_on_first_attempt_returns_result_without_retry(self, monkeypatch):
+        monkeypatch.setattr(mads_lib.pages, "get_page_access_token", lambda page_id, **k: "page-token-1")
+
+        calls = []
+
+        def fake_graph_request(method, path, **kwargs):
+            calls.append(kwargs.get("token"))
+            return {"data": [{"name": "page_media_view", "values": []}]}
+
+        monkeypatch.setattr(mads_lib.pages, "graph_request", fake_graph_request)
+
+        result = mads_lib.pages._insights_request_with_retry(
+            "106391075531104", {"metric": "page_media_view", "period": "day"}, as_json=True,
+        )
+        assert result["data"][0]["name"] == "page_media_view"
+        assert calls == ["page-token-1"]  # only one attempt, no retry
+
+    def test_auth_failure_on_cached_token_triggers_one_retry_with_fresh_token(self, monkeypatch):
+        tokens_requested = []
+
+        def fake_get_page_access_token(page_id, user_token=None, force_refresh=False):
+            tokens_requested.append(force_refresh)
+            return "stale-token" if not force_refresh else "fresh-token"
+
+        monkeypatch.setattr(mads_lib.pages, "get_page_access_token", fake_get_page_access_token)
+
+        calls = []
+
+        def fake_graph_request(method, path, **kwargs):
+            calls.append(kwargs.get("token"))
+            if kwargs.get("token") == "stale-token":
+                raise SystemExit(EXIT_CODES["AUTH"])
+            return {"data": [{"name": "page_media_view", "values": []}]}
+
+        monkeypatch.setattr(mads_lib.pages, "graph_request", fake_graph_request)
+
+        result = mads_lib.pages._insights_request_with_retry(
+            "106391075531104", {"metric": "page_media_view", "period": "day"}, as_json=True,
+        )
+        assert calls == ["stale-token", "fresh-token"]
+        assert tokens_requested == [False, True]
+        assert result["data"][0]["name"] == "page_media_view"
+
+    def test_non_auth_failure_reraises_with_original_exit_code_no_retry(self, monkeypatch):
+        monkeypatch.setattr(mads_lib.pages, "get_page_access_token", lambda page_id, **k: "page-token-1")
+
+        calls = []
+
+        def fake_graph_request(method, path, **kwargs):
+            calls.append(kwargs.get("token"))
+            raise SystemExit(EXIT_CODES["VALIDATION"])
+
+        monkeypatch.setattr(mads_lib.pages, "graph_request", fake_graph_request)
+
+        with pytest.raises(SystemExit) as exc_info:
+            mads_lib.pages._insights_request_with_retry(
+                "106391075531104", {"metric": "page_media_view", "period": "day"}, as_json=True,
+            )
+        assert exc_info.value.code == EXIT_CODES["VALIDATION"]
+        assert calls == ["page-token-1"]  # no retry for a non-AUTH failure
+
+    def test_non_auth_failure_output_is_not_swallowed(self, monkeypatch, capsys):
+        """A real (non-AUTH) error's printed output must survive the buffer-and-replay
+        used to suppress a *successful* retry's stray optimistic-attempt output."""
+        monkeypatch.setattr(mads_lib.pages, "get_page_access_token", lambda page_id, **k: "page-token-1")
+
+        def fake_graph_request(method, path, **kwargs):
+            import sys
+            sys.stderr.write("distinctive-error-marker\n")
+            raise SystemExit(EXIT_CODES["VALIDATION"])
+
+        monkeypatch.setattr(mads_lib.pages, "graph_request", fake_graph_request)
+
+        with pytest.raises(SystemExit):
+            mads_lib.pages._insights_request_with_retry(
+                "106391075531104", {"metric": "page_media_view", "period": "day"}, as_json=True,
+            )
+        assert "distinctive-error-marker" in capsys.readouterr().err

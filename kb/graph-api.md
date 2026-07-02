@@ -484,19 +484,27 @@ GET https://graph.facebook.com/v25.0/{page-id}/insights
 |---|---|---|---|
 | Engagement | `page_post_engagements` | Reactions + comments + shares on posts | day, week, days_28 |
 | Engagement | `page_follows` | Total Page followers | day |
-| Impressions | `page_impressions` | Times any Page content entered a screen | day, week, days_28 |
-| Impressions | `page_impressions_paid` | Impressions from paid distribution | day, week, days_28 |
-| Impressions | `page_impressions_viral` / `_nonviral` | With / without attached social info | day, week, days_28 |
 | Media view (**current replacement for reach**) | `page_media_view` | Times content was played/displayed | day, week, days_28 |
 | Media view | `page_total_media_view_unique` | Total unique media viewers — **the current replacement for `page_impressions_unique`** | day, week, days_28 |
 | Post media view | `post_media_view` / `post_total_media_view_unique` | Post-level equivalents of the above | lifetime |
-| Demographics | `page_fans`, `page_fans_locale`, `page_fans_city`, `page_fans_country` | Likers breakdown | day |
-| Demographics | `page_fan_adds`, `page_fan_adds_unique`, `page_fan_removes` | Like/unlike deltas | day (some also week, days_28) |
 | Video | `page_video_views`, `page_video_views_organic`, `page_video_views_paid` | Videos played 3+ seconds | day, week, days_28 |
 | Video | `page_video_complete_views_30s*` | Videos watched 30+ seconds, several sub-breakdowns | day, week, days_28 |
 | Views | `page_views_total` | Page profile views (logged in + out) | day, week, days_28 |
 | Reactions | `page_actions_post_reactions_like_total` (and `_love`/`_wow`/`_haha`/`_sorry`/`_anger`) | Reaction counts by type | day, week, days_28 |
 | Monetization | `content_monetization_earnings`, `monetization_approximate_earnings` | Estimated payouts | varies |
+
+> **Correction (live-verified 2026-07-02):** this table previously also listed an "Impressions" row
+> (`page_impressions`, `page_impressions_paid`, `page_impressions_viral`/`_nonviral`) and a "Demographics"
+> row (`page_fans`, `page_fans_locale`, `page_fans_city`, `page_fans_country`, `page_fan_adds`,
+> `page_fan_adds_unique`, `page_fan_removes`) as current/valid. All of those were **live-tested against
+> the real Meta Graph API on 2026-07-02** (`GET /{page-id}/insights?metric=...` against Page
+> `106391075531104`, using a proper Page Access Token — see the Gotcha below — so this is not a
+> Page-Access-Token-vs-user-token confusion) and **every one of them returned error `(#100) The value
+> must be a valid insights metric`**, distinct from the "empty `data: []`, no error" shape that a
+> genuinely-valid-but-quiet metric returns. They are removed from the table above. This document's own
+> 2026-07-01 fetch date did not catch this — either the doc page itself lagged the actual API behavior
+> by a day, or the doc's "current metrics" listing was already stale when originally captured. Treat the
+> table above, not the original developer docs page, as the ground truth until re-verified.
 
 **DEPRECATED as of June 15, 2026 (already in effect — do not use, will error on every API version):**
 
@@ -507,12 +515,29 @@ GET https://graph.facebook.com/v25.0/{page-id}/insights
 | `post_impressions`, `post_impressions_unique`, `post_impressions_fan_unique`, `post_impressions_organic_unique`, `post_impressions_nonviral_unique` | `post_media_view` / `post_total_media_view_unique` |
 | `page_video_views_unique`, `post_video_views_unique` | `page_total_media_view_unique` / `post_total_media_view_unique` |
 | `page_video_views_10s*` and `post_video_views_10s*` (all sub-breakdowns) | No 1:1 replacement documented — use the 3s (`page_video_views`) or 30s (`page_video_complete_views_30s`) tiers |
+| `page_impressions` (confirmed dead **live**, 2026-07-02 — not in Meta's originally-published June 15 list) | `page_media_view` (same impression→media-view semantic shift as `page_impressions_unique` above) |
 
 Per the docs verbatim: *"By June 15, 2026, a number of the Page Insights metrics will be deprecated for
 all API versions"* — and this date **already moved up once**, from an originally-announced June 30, 2026
 date, to June 15, 2026. Third-party trackers (Supermetrics, Sprout Social, Emplifi) independently confirm
 the June 15, 2026 live date. **Because today is 2026-07-01, this is not a future warning — any code still
 requesting the deprecated metrics above is broken right now.**
+
+**Additional metrics confirmed dead by LIVE testing on 2026-07-02, with no replacement metric confirmed
+(not documented in Meta's June 15, 2026 changelog wave, and no evidence a like-for-like replacement
+exists — do not guess one):**
+
+| Dead metric | Notes |
+|---|---|
+| `page_fans` | Legacy "Page likes" count; no confirmed current equivalent — `page_follows` (Engagement table above) is the closest modern analog but this is **not** a confirmed 1:1 replacement. |
+| `page_fan_adds`, `page_fan_adds_unique`, `page_fan_removes` | Like/unlike deltas — dead alongside `page_fans` above. |
+| `page_fans_locale`, `page_fans_city`, `page_fans_country` | Likers demographic breakdowns — dead alongside `page_fans` above. |
+| `page_impressions_paid`, `page_impressions_viral`, `page_impressions_nonviral` | Dead alongside plain `page_impressions` above; no paid/viral-split equivalent of `page_media_view` found live. |
+| `page_engaged_users` | Predates the June 2026 wave entirely — this is a pre-2018-era Insights metric name, already dead independent of the other deprecations here. |
+
+`mads-cli`'s `mads_lib/pages.py` pre-flight-rejects every metric in both tables above (VALIDATION exit
+code) before sending the request to the API, rather than letting the call fail opaquely — see
+`DEPRECATED_METRIC_REPLACEMENTS` and `CONFIRMED_DEAD_NO_REPLACEMENT` in that file.
 
 The underlying semantic shift: the old "impression" event (content delivered to a feed) is being replaced
 everywhere by a "media view" event (content actually visually rendered). Both count unique users, but
@@ -757,6 +782,71 @@ Sources:
 10. **`/oauth/revoke` and `/oauth/access_token` are top-level OAuth endpoints, not System-User-node
     edges** — don't accidentally construct them as `/{system-user-id}/oauth/revoke`; they hang directly
     off the API root.
+
+11. **`AdsPixel.owner_ad_account` can point to an ad account entirely outside the caller's Business
+    Manager, and expanding it then fails the WHOLE request with `(#200) Ad account owner has NOT grant
+    ads_management or ads_read permission`** — even though every other field on the same pixel resolves
+    fine and the caller has full `DRAFT/ANALYZE/ADVERTISE/MANAGE` tasks on the ad account being queried.
+    Root-caused live 2026-07-02 against App ID `1332295765705902` / Business `1183781372354749` / ad
+    account `act_565243822008153`:
+    - `mads capi list-pixels --json` (requesting the full `DEFAULT_PIXEL_FIELDS` set, which included
+      `owner_ad_account`) failed with error 200 as above.
+    - Bisecting field-by-field (`GET act_565243822008153/adspixels?fields=id,name,<one field>` for each
+      of `creation_time`, `is_consolidated_container`, `last_fired_time`, `match_rate_approx`,
+      `owner_business`, `data_use_setting`) showed **only `owner_ad_account` fails** — every other field,
+      including the structurally similar `owner_business`, returns cleanly.
+    - The failure reproduces identically querying the pixel by its bare numeric ID
+      (`GET /3192549394396428?fields=owner_ad_account`) and via the Business-scoped path
+      (`GET /1183781372354749/adspixels?fields=owner_ad_account`) — it is not specific to one node path.
+    - It reproduces on **both** pixels in the account: the Shopify-channel-created one
+      (`3192549394396428`, "Ads Pixel for Shopify Facebook Ad") and the natively-created one
+      (`1081436410576446`, "Talas Auto Spare Parts Trading's pixel") — so it is not a Shopify-specific
+      quirk, just a "foreign owning ad account" quirk that happened to affect both pixels here.
+    - Confirmed the caller has full `['DRAFT', 'ANALYZE', 'ADVERTISE', 'MANAGE']` tasks on
+      `act_565243822008153` via `GET act_565243822008153/assigned_users?business=1183781372354749`, and
+      `GET me/adaccounts` lists 7 total ad accounts visible to this user (1 full-access, 4 with only the
+      `ANALYZE` task, 2 with zero `assigned_users` entries) — none of which directly own either pixel
+      per `GET act_<id>/adspixels` returning `{"data": []}` for all of them. The pixels' true
+      `owner_ad_account` is therefore an ad account that never appears anywhere in this
+      user's/Business's visible asset graph — Meta enforces the field-level permission check against
+      that real (foreign) owner, not against the account/edge you queried through.
+    - **This is a client-side default-fields bug, not a grantable Business Manager asset-permission
+      gap** — there is no `assigned_users` action that fixes it, because the account that would need to
+      grant access isn't one the caller (or the Business) administers at all. `mads-cli` fixed this by
+      dropping `owner_ad_account` from `capi.py`'s `DEFAULT_PIXEL_FIELDS`; callers who need it for a
+      *known-good, same-Business* pixel can still request it explicitly via `--fields`.
+
+12. **`GET /{page-id}/insights` requires a Page Access Token — the general user/system-user token gets
+    you error 190, `"This method must be called with a Page Access Token"`.** This is a *different*
+    meaning of error 190 than its far more common "expired/invalid token" meaning (see
+    `mads_lib/http.py::_ERROR_CODE_MAP`, which maps 190 → `AUTH` either way — the distinction only shows
+    up in the error `message` string). `GET /{page-id}` (Page profile info) does **not** need a Page
+    token — only page-scoped edges like `/insights` do.
+
+    A Page Access Token is obtained via `GET /me/accounts` (or `GET /{user-id}/accounts`), authenticated
+    with the *user* token, which returns each managed Page's `id`, `name`, and a page-scoped
+    `access_token`. Confirmed live 2026-07-02 against Page `106391075531104` ("Talas Tesla Auto Parts")
+    using the project's user token (scopes `ads_management, ads_read, business_management,
+    pages_read_engagement, pages_show_list`) — the call succeeded and returned a distinct page-scoped
+    token with the `ANALYZE` task present (required for Insights reads).
+
+    **Lifetime of the returned Page Access Token:** confirmed live via `GET /debug_token` against the
+    freshly-issued Page token — response showed `expires_at: 0` (Meta's convention for "does not
+    expire"), **even though** the parent user token it was derived from is itself a 60-day token with a
+    real, non-zero expiry. A Page Access Token minted from a valid "Login for Business" user token gets
+    its own long-lived/non-expiring lifetime, independent of that parent token's remaining life. This is
+    why caching it to disk (rather than re-fetching on every single Page-scoped call) is correct.
+
+    **How `mads-cli` handles this:** `mads_lib/auth.py::get_page_access_token(page_id)` fetches a Page
+    Access Token via `GET /me/accounts` on first use and caches it to
+    `credentials/meta-page-tokens.json` (gitignored, override path via `MADS_PAGE_TOKENS_PATH`) as a
+    flat `{page_id: access_token}` map — every Page returned by that call is cached in the same pass,
+    not just the one requested. `mads_lib/pages.py::page_insights` uses this Page token instead of the
+    general one; `page_insights` also retries exactly once with a freshly-fetched token
+    (`force_refresh=True`) if a cache hit still comes back with a 190/AUTH error (covers the
+    out-of-band-invalidation case: password change, app deauthorization, or the granting user's
+    `pages_show_list`/`pages_read_engagement` scope being revoked). `page_info` deliberately keeps using
+    the general token — it was never broken and doesn't need this.
 
 ---
 

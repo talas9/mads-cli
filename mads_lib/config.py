@@ -55,6 +55,10 @@ CONFIG_HOME = GLOBAL_HOME
 
 DB_PATH = Path(os.environ.get("MADS_DB_PATH", SCOPE_ROOT / "data" / "mads.db"))
 CREDS_PATH = Path(os.environ.get("MADS_CREDENTIALS_PATH", SCOPE_ROOT / "credentials" / "meta-oauth.json"))
+# Page Access Token cache — separate from CREDS_PATH (the user/system-user token).
+# Page-scoped calls (page insights) need a *Page* Access Token, which is a different
+# credential obtained via GET /me/accounts. See auth.py::get_page_access_token().
+PAGE_TOKENS_PATH = Path(os.environ.get("MADS_PAGE_TOKENS_PATH", SCOPE_ROOT / "credentials" / "meta-page-tokens.json"))
 SNAPSHOTS_DIR = Path(os.environ.get("MADS_SNAPSHOTS_DIR", SCOPE_ROOT / "snapshots"))
 
 # ── Meta (Facebook/Instagram) Ads ────────────────────────────
