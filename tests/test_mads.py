@@ -18,8 +18,12 @@ import json
 
 import click
 import pytest
+import requests
 from click.testing import CliRunner
 
+import mads_lib.audiences
+import mads_lib.capi
+import mads_lib.commerce
 from mads_lib import __version__
 from mads_lib.cli import cli
 from mads_lib import dbread
@@ -480,3 +484,158 @@ class TestGraphRequestNoRealNetwork:
     def test_batch_request_rejects_non_list(self):
         with pytest.raises(ValueError, match="must be a list"):
             batch_request({"method": "GET"})
+
+
+class TestAutoLogSurvivesMissingDB:
+    """Regression test for the known bug pattern: `get_db()` raises
+    `SystemExit(1)` (not a plain `Exception`) when MADS_DB_PATH doesn't exist
+    yet. `mads_lib.cli._auto_log()` is documented as "never raises" (it's a
+    best-effort changelog write called after a mutation has *already*
+    succeeded against the live API) — it must swallow that SystemExit too,
+    not just plain exceptions, or a successful mutation would incorrectly
+    surface as a failed command.
+    """
+
+    def test_auto_log_swallows_systemexit_from_missing_db(self, monkeypatch):
+        def _raise_system_exit(*a, **k):
+            raise SystemExit(1)
+
+        monkeypatch.setattr("mads_lib.cli.get_db", _raise_system_exit)
+
+        # Must not raise — this is the whole point of _auto_log being
+        # "best-effort". Before the fix, `except Exception:` let SystemExit
+        # (a BaseException subclass, not an Exception subclass) escape here.
+        from mads_lib.cli import _auto_log
+        _auto_log("test_action", "test details", campaign_name="c", campaign_id="123")
+
+    def test_auto_log_swallows_plain_exception_from_missing_db(self, monkeypatch):
+        def _raise(*a, **k):
+            raise RuntimeError("some other DB error")
+
+        monkeypatch.setattr("mads_lib.cli.get_db", _raise)
+
+        from mads_lib.cli import _auto_log
+        _auto_log("test_action", "test details")
+
+
+class TestGraphRequestNetworkErrors:
+    """Network-layer failures (timeouts, DNS/connection errors) must be
+    caught distinctly from HTTP-level 4xx/5xx API errors and produce a
+    clean, classified SystemExit — not a raw exception/traceback leaking out
+    of graph_request() to the caller.
+    """
+
+    def test_timeout_exits_with_clear_message(self, monkeypatch, fake_token, capsys):
+        def _raise_timeout(*a, **k):
+            raise requests.exceptions.Timeout("Connection timed out")
+
+        monkeypatch.setattr("mads_lib.http.requests.request", _raise_timeout)
+
+        with pytest.raises(SystemExit) as exc_info:
+            graph_request("GET", "act_123/campaigns", token=fake_token, as_json=True)
+
+        assert exc_info.value.code == EXIT_CODES["API"]
+        captured = capsys.readouterr()
+        body = json.loads(captured.err)
+        assert "timed out" in body["error"]["message"].lower()
+
+    def test_connection_error_exits_with_clear_message_not_raw(self, monkeypatch, fake_token, capsys):
+        def _raise_conn_error(*a, **k):
+            raise requests.exceptions.ConnectionError(
+                "HTTPSConnectionPool(host='graph.facebook.com', port=443): "
+                "Max retries exceeded (Failed to establish a new connection)"
+            )
+
+        monkeypatch.setattr("mads_lib.http.requests.request", _raise_conn_error)
+
+        with pytest.raises(SystemExit) as exc_info:
+            graph_request("GET", "act_123/campaigns", token=fake_token, as_json=True)
+
+        assert exc_info.value.code == EXIT_CODES["API"]
+        captured = capsys.readouterr()
+        body = json.loads(captured.err)
+        # Message must be classified/actionable — mentioning the network angle —
+        # not just the bare urllib3 string with no guidance.
+        assert "could not reach" in body["error"]["message"].lower()
+        assert "network" in body["error"]["message"].lower() or "dns" in body["error"]["message"].lower()
+
+    def test_generic_request_exception_exits_cleanly(self, monkeypatch, fake_token):
+        def _raise_generic(*a, **k):
+            raise requests.exceptions.RequestException("some other transport failure")
+
+        monkeypatch.setattr("mads_lib.http.requests.request", _raise_generic)
+
+        with pytest.raises(SystemExit) as exc_info:
+            graph_request("GET", "act_123/campaigns", token=fake_token, as_json=False)
+
+        assert exc_info.value.code == EXIT_CODES["API"]
+
+
+class TestAccountIdValidation:
+    """audiences.py and capi.py functions previously did
+    `account = ad_account_id or AD_ACCOUNT_ID` with no validation and no
+    `act_` prefix normalization — an empty/missing account id silently built
+    a malformed path (e.g. `/customaudiences` with no account node) instead
+    of a clear pre-flight VALIDATION error, and a bare numeric id (no `act_`
+    prefix) would 404 against the live API instead of being normalized.
+    """
+
+    def test_list_audiences_raises_validation_error_when_account_missing(self, monkeypatch):
+        monkeypatch.setattr("mads_lib.audiences.AD_ACCOUNT_ID", "")
+        with pytest.raises(SystemExit) as exc_info:
+            mads_lib.audiences.list_audiences(ad_account_id=None, as_json=True)
+        assert exc_info.value.code == EXIT_CODES["VALIDATION"]
+
+    def test_list_audiences_normalizes_bare_numeric_account_id(self, monkeypatch, fake_token):
+        captured_urls = []
+
+        def fake_request(method, url, **kwargs):
+            captured_urls.append(url)
+            return _FakeResponse(status_code=200, json_data={"data": []})
+
+        monkeypatch.setattr("mads_lib.http.requests.request", fake_request)
+        mads_lib.audiences.list_audiences(ad_account_id="1234567890", token=fake_token, as_json=True)
+
+        assert len(captured_urls) == 1
+        assert "/act_1234567890/customaudiences" in captured_urls[0]
+
+    def test_create_pixel_raises_validation_error_when_account_missing(self, monkeypatch):
+        monkeypatch.setattr("mads_lib.capi.AD_ACCOUNT_ID", "")
+        with pytest.raises(SystemExit) as exc_info:
+            mads_lib.capi.create_pixel("test pixel", ad_account_id=None, as_json=True)
+        assert exc_info.value.code == EXIT_CODES["VALIDATION"]
+
+    def test_create_catalog_raises_validation_error_when_business_id_missing(self, monkeypatch):
+        monkeypatch.setattr("mads_lib.commerce.BUSINESS_ID", "")
+        with pytest.raises(SystemExit) as exc_info:
+            mads_lib.commerce.create_catalog("test catalog", business_id=None, as_json=True)
+        assert exc_info.value.code == EXIT_CODES["VALIDATION"]
+
+
+class TestMutatePartialProgress:
+    """`mads mutate` runs multiple ops as sequential client-side HTTP calls
+    (not the Meta batch API). If op N fails partway through, ops 0..N-1 have
+    already executed against the live account — the user must be told how
+    much already ran so they don't blindly re-run (and duplicate) the whole
+    batch.
+    """
+
+    def test_partial_failure_reports_how_many_ops_already_ran(self, monkeypatch, tmp_path):
+        calls = []
+
+        def fake_graph_request(method, path, **kwargs):
+            calls.append(path)
+            if len(calls) == 2:
+                raise SystemExit(EXIT_CODES["AUTH"])
+            return {"id": f"fake_{len(calls)}"}
+
+        monkeypatch.setattr("mads_lib.cli.graph_request", fake_graph_request)
+
+        ops_json = json.dumps([{"name": "a"}, {"name": "b"}, {"name": "c"}])
+        result = runner.invoke(
+            cli, ["mutate", "act_123/campaigns", ops_json, "--yes"],
+        )
+
+        assert result.exit_code == EXIT_CODES["AUTH"]
+        assert len(calls) == 2  # third op never ran
+        assert "1 of 3" in result.output

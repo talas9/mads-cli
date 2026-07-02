@@ -48,10 +48,14 @@ API host, not separate hosts like Google's per-API subdomains).
   `targeting.DevicePlatforms` value count, `Business.create_ads_pixel` doc-vs-SDK contradiction,
   `dedup_key_feedback` vs `dedupe_key_feedback` spelling) — read the relevant file's own notes
   before relying on any single field/enum in code.
-- `mads-cli`'s own implementation (`mads_lib/`) is still skeletal (config/auth/http/db/cli
-  scaffolding + `catalog` command only — no campaign/ad-set/ad/creative resource commands yet), so
-  no "Coverage vs mads-cli" cross-reference section was added to any KB file; there is nothing real
-  to cross-reference yet.
+- `mads-cli`'s own implementation (`mads_lib/`) is fully wired (verified live via
+  `mads catalog --json`, 2026-07-02): **82 commands across 25 groups**, including dedicated
+  `campaign`/`adset`/`ad`/`creative` resource commands (CRUD + status/budget), plus `audience`,
+  `commerce`, `capi`, `insights`, `abtest`, `business`, `page`, `webhook`, and `analyze` (5
+  read-only checks), on top of the config/auth/http/db/cli scaffolding and core `query`,
+  `mutate`/`batch-mutate`, `snapshot`, `log`, `catalog`, `db`, `changelog`, `decisions`,
+  `milestones` commands. No "Coverage vs mads-cli" cross-reference section has been added to any KB
+  file yet, though — that remains a real gap to fill.
 
 ## Sister tool
 

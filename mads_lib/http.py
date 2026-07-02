@@ -115,22 +115,45 @@ def graph_request(method, path, *, params=None, json_body=None, files=None, toke
     merged_params = dict(params or {})
     merged_params.update(_auth_params(token))
 
-    if files:
-        resp = requests.request(
-            method,
-            url,
-            data=merged_params,
-            files=files,
-            timeout=timeout,
-        )
-    else:
-        resp = requests.request(
-            method,
-            url,
-            params=merged_params,
-            json=json_body,
-            timeout=timeout,
-        )
+    try:
+        if files:
+            resp = requests.request(
+                method,
+                url,
+                data=merged_params,
+                files=files,
+                timeout=timeout,
+            )
+        else:
+            resp = requests.request(
+                method,
+                url,
+                params=merged_params,
+                json=json_body,
+                timeout=timeout,
+            )
+    except requests.exceptions.Timeout:
+        raise SystemExit(print_error(
+            f"Request to Meta Graph API timed out after {timeout}s ({method} {url}). "
+            "This is a network/latency issue, not a Meta API error — retry, or pass a "
+            "longer timeout if it persists.",
+            code="API", as_json=as_json,
+        ))
+    except requests.exceptions.ConnectionError as e:
+        raise SystemExit(print_error(
+            f"Could not reach the Meta Graph API ({method} {url}): {e}. "
+            "The request never reached graph.facebook.com — check your network "
+            "connection, DNS, or firewall/proxy settings.",
+            code="API", as_json=as_json,
+        ))
+    except requests.exceptions.RequestException as e:
+        # Catch-all for other network-layer failures (SSL errors, too-many-redirects,
+        # etc.) that are distinct from an HTTP-level 4xx/5xx API error below.
+        raise SystemExit(print_error(
+            f"Network error calling Meta Graph API ({method} {url}): "
+            f"{type(e).__name__}: {e}",
+            code="API", as_json=as_json,
+        ))
 
     if resp.status_code >= 400:
         try:

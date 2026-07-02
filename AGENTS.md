@@ -51,7 +51,7 @@ into the JSON error object.
 
 ## Command Taxonomy
 
-Verified by walking the live Click tree (`mads catalog`) — **59 commands** across 11 groups plus
+Verified by walking the live Click tree (`mads catalog`) — **82 commands** across 15 groups plus
 top-level core commands.
 
 | Group | Commands | Description |
@@ -67,20 +67,20 @@ top-level core commands.
 | **Business** | `business info`, `adaccounts`, `pages`, `users`, `system-user create/list`, `token generate/renew` | Business Manager account/page/user listing + System User + token management |
 | **Page** | `page info`, `insights` | Page profile + organic Page/Post Insights (**no reviews** — see Known Gotchas) |
 | **Webhook** | `webhook subscribe`, `list`, `unsubscribe` | Ad-account webhook subscriptions (**5 fixed triggers only** — see Known Gotchas) |
+| **Audience** | `audience list`, `create`, `create-lookalike`, `upload-users`, `delete` | Custom/Lookalike Audience CRUD + hashed-PII user upload |
+| **Commerce** | `commerce create-catalog`, `create-feed`, `upload-feed`, `create-product`, `list-products`, `batch-update`, `batch-status` | Commerce Manager: ProductCatalog/ProductFeed/ProductItem CRUD + Catalog Batch API |
+| **CAPI** | `capi create-pixel`, `create-dataset`, `list-pixels`, `send-event`, `test-event`, `hash-user-data` | Conversions API pixel/dataset management, server-side event send, local PII hashing utility |
+| **Analyze** | `analyze audit`, `budget-pacing`, `creative-fatigue`, `audience-overlap`, `placement-breakdown` | Read-only analysis (mirrors gads-cli's `analyze` group) — none of these mutate the account |
 
 > Note: `auth system-user`/`auth token` and `business system-user`/`business token` both exist
 > and call the same Business Manager System User endpoints (`POST/GET {business_id}/system_users`,
 > `POST {system_user_id}/access_tokens`). This is intentional — two entry points to the same
 > operation, not a bug — pick whichever reads more naturally for the calling context.
 
-**Not yet wired to the CLI** (library functions exist in `mads_lib/`, but no `@click.command()`
-wraps them — do not assume these run as `mads <verb>` commands):
-- `mads_lib/audiences.py` — Custom/Lookalike Audience list/create/upload/delete functions
-- `mads_lib/commerce.py` — Catalog/Product Feed create/upload/list functions
-- `mads_lib/capi.py` — Conversions API pixel/dataset/event-send functions
-- `mads_lib/analyze/*.py` — `audit`, `budget_pacing`, `creative_fatigue`, `audience_overlap`,
-  `placement_breakdown` analysis functions (mirrors gads-cli's `analyze` group in *purpose*, not
-  yet in CLI surface)
+The `audience`/`commerce`/`capi`/`analyze` Click groups are defined directly in `mads_lib/cli.py`
+(not in `audiences.py`/`commerce.py`/`capi.py`/`analyze/*.py` themselves, which remain pure
+function libraries) — this mirrors gads-cli's convention of wiring `gads_lib/merchant.py` and
+`gads_lib/analyze/*.py` via a Click group defined in `gads_lib/cli.py`.
 
 ## Reading Project Memory
 

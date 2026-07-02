@@ -20,6 +20,7 @@ import time
 
 from .config import AD_ACCOUNT_ID
 from .http import graph_request
+from .output import print_error
 
 # KB: kb/marketing-api.md § Custom Audiences — "Key fields" table (verbatim field list).
 DEFAULT_AUDIENCE_FIELDS = (
@@ -69,6 +70,24 @@ def _hash_schema_value(value, schema_key: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _require_act_id(ad_account_id, as_json=False):
+    """Build + validate the `act_`-prefixed ad-account id.
+
+    Mirrors campaigns.py's `_act_id`/`_require_act_id` (KB § Base URL / Gotcha
+    #2: a bare numeric ad-account id 404s — the `act_` prefix is mandatory).
+    Without this, `ad_account_id or AD_ACCOUNT_ID` being empty/unprefixed
+    silently built a malformed `/customaudiences` path (missing the account
+    node entirely) instead of a clear pre-flight error.
+    """
+    aid = (ad_account_id or AD_ACCOUNT_ID or "").strip()
+    if not aid:
+        raise SystemExit(print_error(
+            "META_AD_ACCOUNT_ID is not set (or pass --ad-account-id).",
+            code="VALIDATION", as_json=as_json,
+        ))
+    return aid if aid.startswith("act_") else f"act_{aid}"
+
+
 # KB: kb/marketing-api.md § Resources & Endpoints (implicit) | https://developers.facebook.com/docs/marketing-api/reference/custom-audience/
 def list_audiences(*, ad_account_id=None, fields=DEFAULT_AUDIENCE_FIELDS, limit=None,
                     after=None, token=None, as_json=False):
@@ -85,7 +104,7 @@ def list_audiences(*, ad_account_id=None, fields=DEFAULT_AUDIENCE_FIELDS, limit=
                  the field list pulled from the KB's Key Fields table)
       paging   — cursor pagination object
     """
-    account = ad_account_id or AD_ACCOUNT_ID
+    account = _require_act_id(ad_account_id, as_json)
     params = {}
     if fields:
         params["fields"] = fields
@@ -117,7 +136,7 @@ def create_custom_audience(name, *, customer_file_source="USER_PROVIDED_ONLY",
 
     Response shape (KB-confirmed): {"id": "<numeric string>"}
     """
-    account = ad_account_id or AD_ACCOUNT_ID
+    account = _require_act_id(ad_account_id, as_json)
     body = {"name": name, "subtype": subtype, "customer_file_source": customer_file_source}
     if description:
         body["description"] = description
@@ -153,7 +172,7 @@ def create_lookalike_audience(name, origin_audience_id, *, ratio=0.01, country="
             f"create_lookalike_audience: ratio={ratio} out of Meta's allowed range "
             f"[{LOOKALIKE_RATIO_MIN}, {LOOKALIKE_RATIO_MAX}]."
         )
-    account = ad_account_id or AD_ACCOUNT_ID
+    account = _require_act_id(ad_account_id, as_json)
     lookalike_spec = {"type": lookalike_type, "ratio": ratio, "country": country}
     if starting_ratio is not None:
         lookalike_spec["starting_ratio"] = starting_ratio

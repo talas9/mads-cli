@@ -18,9 +18,12 @@ Before assuming any command shape, run discovery — do not guess flags or subco
 
 1. `mads catalog --json` — full machine-readable manifest of every implemented command, its
    params, and help text. This is the ground truth for what `mads` can actually do today; the CLI
-   is still early (auth, `query`, `mutate`/`batch-mutate`, `snapshot`, `log`, `catalog`, `db`,
-   `changelog`, `decisions`, `milestones` — no dedicated campaign/ad-set/ad/creative resource
-   commands yet).
+   is fully wired (verified live via `mads catalog --json`, 2026-07-02): **82 commands across 25
+   groups**, including dedicated `campaign`/`adset`/`ad`/`creative` resource commands (CRUD +
+   status/budget), plus `audience`, `commerce`, `capi`, `insights`, `abtest`, `business`, `page`,
+   `webhook`, and `analyze` (5 read-only checks) — alongside the core `auth`, `query`,
+   `mutate`/`batch-mutate`, `snapshot`, `log`, `catalog`, `db`, `changelog`, `decisions`,
+   `milestones` commands.
 2. `mads kb list` — mirrors the `gads-cli` `kb` command-group convention (`kb list` / `kb show` /
    `kb check`) for surfacing the KB files below. Not yet implemented in `mads-cli` as of this
    writing (see the `TODO(mads-cli)` block in `mads_lib/cli.py`) — until it lands, read the KB
@@ -40,3 +43,9 @@ Before assuming any command shape, run discovery — do not guess flags or subco
 `kb/manifest.json` and `kb/INDEX.md` index all four with current version, base URL, OAuth scopes,
 and status. Read the specific KB file for the resource you're touching before writing code against
 it — do not rely on training-data knowledge of the Meta Marketing API, which changes frequently.
+
+## Sister tool
+
+For **Google Ads, Google Business Profile (GBP), Google Merchant Center, GA4, and Google Search
+Console**, see the sister CLI **gads-cli**: https://github.com/talas9/gads-cli
+(skill: `gads-cli/.agents/skills/gads-cli/SKILL.md`)

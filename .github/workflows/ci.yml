@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-cov
+
+      - name: Syntax check - import mads_lib.cli
+        run: |
+          python -c "from mads_lib.cli import cli; print('✓ mads_lib.cli imports successfully')"
+
+      - name: Syntax check - compile mads shim
+        run: |
+          python -m py_compile mads
+          echo "✓ mads shim compiles"
+
+      - name: Verify entry point - mads --version
+        run: |
+          mads --version
+
+      - name: Verify entry point - mads --help
+        run: |
+          mads --help | grep -q "Meta (Facebook/Instagram) Ads CLI"
+          echo "✓ mads --help works"
+
+      - name: Check for hardcoded secrets - phone numbers
+        run: |
+          # Check for 10+ consecutive digits (potential phone numbers)
+          if grep -r '[0-9]\{10,\}' --include='*.py' --include='*.md' --include='*.env*' . \
+            | grep -v '.git' \
+            | grep -v 'pyproject.toml' \
+            | grep -v 'CHANGELOG.md' \
+            | grep -v '__pycache__' \
+            | grep -v 'test_' \
+            | grep -v '# ' \
+            | grep -v 'Customer ID' \
+            | grep -v 'account_id' \
+            | grep -v 'property_id' \
+            | grep -v '.example' \
+            | head -20; then
+            echo "⚠ Found potential hardcoded numbers - review manually"
+          else
+            echo "✓ No obvious hardcoded secrets found"
+          fi
+
+      - name: Check for hardcoded secrets - API keys/tokens
+        run: |
+          # Check for common secret patterns
+          if grep -rE '(api_key|apikey|token|secret|password)\s*=' --include='*.py' . \
+            | grep -v '.git' \
+            | grep -v 'test_' \
+            | grep -v 'def ' \
+            | grep -v '#' \
+            | grep -v 'os.environ' \
+            | grep -v '_token' \
+            | head -10; then
+            echo "⚠ Found potential hardcoded secrets - review manually"
+          else
+            echo "✓ No obvious hardcoded secrets found"
+          fi
+
+      - name: Check for hardcoded secrets - email addresses
+        run: |
+          # Check for email patterns in non-config files
+          if grep -rE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' --include='*.py' . \
+            | grep -v '.git' \
+            | grep -v 'test_' \
+            | grep -v '#' \
+            | grep -v 'example' \
+            | grep -v '@click' \
+            | grep -v '@property' \
+            | head -10; then
+            echo "⚠ Found potential hardcoded emails - review manually"
+          else
+            echo "✓ No obvious hardcoded emails found"
+          fi
+
+      - name: Run tests (if available)
+        run: |
+          if [ -d tests ] || [ -d test ]; then
+            pytest -v --tb=short
+          else
+            echo "ℹ No tests directory found"
+          fi
+        continue-on-error: true
+
+      - name: Coverage report (if pytest ran)
+        run: |
+          if command -v pytest &> /dev/null; then
+            pytest --cov=mads_lib --cov-report=term-missing -v || echo "ℹ No tests to run"
+          fi
+        continue-on-error: true

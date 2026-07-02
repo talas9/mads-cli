@@ -44,9 +44,30 @@ def _upload_local_file(path, *, file_path, field_name="file", extra_fields=None,
     url = f"{BASE_URL}/{path.lstrip('/')}"
 
     fp = Path(file_path)
-    with fp.open("rb") as fh:
-        files = {field_name: (fp.name, fh)}
-        resp = requests.post(url, params=params, data=dict(extra_fields or {}), files=files, timeout=timeout)
+    try:
+        with fp.open("rb") as fh:
+            files = {field_name: (fp.name, fh)}
+            resp = requests.post(url, params=params, data=dict(extra_fields or {}), files=files, timeout=timeout)
+    except requests.exceptions.Timeout:
+        raise SystemExit(print_error(
+            f"Upload to Meta Graph API timed out after {timeout}s ({path}). "
+            "This is a network/latency issue, not a Meta API error — retry, or pass a "
+            "longer timeout for large files.",
+            code="API", as_json=as_json,
+        ))
+    except requests.exceptions.ConnectionError as e:
+        raise SystemExit(print_error(
+            f"Could not reach the Meta Graph API ({path}): {e}. "
+            "The upload never reached graph.facebook.com — check your network "
+            "connection, DNS, or firewall/proxy settings.",
+            code="API", as_json=as_json,
+        ))
+    except requests.exceptions.RequestException as e:
+        raise SystemExit(print_error(
+            f"Network error uploading to Meta Graph API ({path}): "
+            f"{type(e).__name__}: {e}",
+            code="API", as_json=as_json,
+        ))
 
     if resp.status_code >= 400:
         try:
@@ -69,6 +90,20 @@ def _upload_local_file(path, *, file_path, field_name="file", extra_fields=None,
     if not resp.text:
         return {}
     return resp.json()
+
+
+def _require_business_id(business_id, as_json=False):
+    """Validate the Business Manager id. Mirrors abtest.py's/business.py's
+    `_require_business_id` — without this, `business_id or BUSINESS_ID` being
+    empty silently built a malformed `/owned_product_catalogs` path (missing
+    the business node entirely) instead of a clear pre-flight error.
+    """
+    biz = business_id or BUSINESS_ID
+    if not biz:
+        raise SystemExit(print_error(
+            "META_BUSINESS_ID is not set (or pass --business-id).", code="VALIDATION", as_json=as_json,
+        ))
+    return biz
 
 
 # KB: kb/commerce-catalog.md § "POST /{business_id}/owned_product_catalogs — Create a catalog"
@@ -96,7 +131,7 @@ def create_catalog(name, *, vertical="commerce", business_id=None, business_meta
 
     Response shape (KB-confirmed): {"id": "<numeric string>"}
     """
-    biz = business_id or BUSINESS_ID
+    biz = _require_business_id(business_id, as_json)
     body = {"name": name, "vertical": vertical}
     if business_metadata:
         body["business_metadata"] = business_metadata

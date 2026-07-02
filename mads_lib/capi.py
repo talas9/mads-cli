@@ -21,6 +21,7 @@ import time
 
 from .config import AD_ACCOUNT_ID
 from .http import graph_request
+from .output import print_error
 
 # KB: kb/conversions-api.md § "Rate Limits and Batch Constraints — Summary".
 MAX_EVENTS_PER_REQUEST = 1000
@@ -94,6 +95,24 @@ def hash_user_data(user_data: dict, *, already_hashed: bool = False) -> dict:
     return out
 
 
+def _require_act_id(ad_account_id, as_json=False):
+    """Build + validate the `act_`-prefixed ad-account id.
+
+    Mirrors campaigns.py's `_act_id`/`_require_act_id` (KB § Base URL / Gotcha
+    #2: a bare numeric ad-account id 404s — the `act_` prefix is mandatory).
+    Without this, `ad_account_id or AD_ACCOUNT_ID` being empty/unprefixed
+    silently built a malformed `/adspixels` path instead of a clear pre-flight
+    error.
+    """
+    aid = (ad_account_id or AD_ACCOUNT_ID or "").strip()
+    if not aid:
+        raise SystemExit(print_error(
+            "META_AD_ACCOUNT_ID is not set (or pass --ad-account-id).",
+            code="VALIDATION", as_json=as_json,
+        ))
+    return aid if aid.startswith("act_") else f"act_{aid}"
+
+
 # KB: kb/conversions-api.md § "POST /act_{AD_ACCOUNT_ID}/adspixels — Create Pixel/Dataset"
 # https://developers.facebook.com/docs/marketing-api/reference/ad-account/adspixels/
 def create_pixel(name, *, ad_account_id=None, token=None, as_json=False):
@@ -112,7 +131,7 @@ def create_pixel(name, *, ad_account_id=None, token=None, as_json=False):
 
     Response shape (KB-confirmed): {"id": "<numeric string>"}
     """
-    account = ad_account_id or AD_ACCOUNT_ID
+    account = _require_act_id(ad_account_id, as_json)
     return graph_request("POST", f"{account}/adspixels", params={"name": name}, token=token, as_json=as_json)
 
 
@@ -149,7 +168,7 @@ def list_pixels(*, ad_account_id=None, business_id=None, fields=DEFAULT_PIXEL_FI
         if name_filter:
             params["name_filter"] = name_filter
         return graph_request("GET", f"{business_id}/adspixels", params=params, token=token, as_json=as_json)
-    account = ad_account_id or AD_ACCOUNT_ID
+    account = _require_act_id(ad_account_id, as_json)
     return graph_request("GET", f"{account}/adspixels", params=params, token=token, as_json=as_json)
 
 
