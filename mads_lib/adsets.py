@@ -120,13 +120,13 @@ def _minor_units(amount):
     return str(int(round(amount * 100)))
 
 
-def _build_targeting(countries, age_min, age_max):
+def _build_targeting(countries, age_min, age_max, publisher_platforms=None, instagram_positions=None):
     """Build a minimal `targeting` object from convenience flags.
 
     KB § Targeting Reference: `geo_locations` (or an audience-based
     alternative) is required. This only covers the common
-    countries/age_min/age_max case — pass --targeting with a raw JSON object
-    for anything richer (placements, flexible_spec interests/behaviors, etc).
+    countries/age_min/age_max/placements case — pass --targeting with a raw
+    JSON object for anything richer (flexible_spec interests/behaviors, etc).
     """
     targeting = {}
     if countries:
@@ -135,6 +135,10 @@ def _build_targeting(countries, age_min, age_max):
         targeting["age_min"] = age_min
     if age_max is not None:
         targeting["age_max"] = age_max
+    if publisher_platforms:
+        targeting["publisher_platforms"] = [p.strip().lower() for p in publisher_platforms.split(",")]
+    if instagram_positions:
+        targeting["instagram_positions"] = [p.strip().lower() for p in instagram_positions.split(",")]
     return targeting
 
 
@@ -196,6 +200,8 @@ def adset_list(campaign_id, ad_account_id, fields, include_deleted, limit, as_js
 @click.option("--countries", default=None, help="Comma-separated ISO country codes for targeting.geo_locations.countries.")
 @click.option("--age-min", type=int, default=None, help="KB floor: 13 (many objectives default the practical floor to 18).")
 @click.option("--age-max", type=int, default=None, help="KB ceiling: 65.")
+@click.option("--publisher-platforms", default=None, help="Comma-separated platforms for targeting.publisher_platforms, e.g. facebook,instagram.")
+@click.option("--instagram-positions", default=None, help="Comma-separated placements for targeting.instagram_positions, e.g. stream,story,reels.")
 @click.option("--pixel-id", default=None, help="Sets promoted_object.pixel_id for conversion-based optimization.")
 @click.option("--custom-event-type", default=None,
               help="e.g. PURCHASE, LEAD, COMPLETE_REGISTRATION — paired with --pixel-id (full event enum not in the KB; pass the literal Meta event name).")
@@ -205,7 +211,8 @@ def adset_list(campaign_id, ad_account_id, fields, include_deleted, limit, as_js
 @click.option("--json", "as_json", is_flag=True)
 def adset_create(name, campaign_id, billing_event, optimization_goal, bid_strategy, bid_amount,
                   daily_budget, lifetime_budget, minor_units, status, targeting, countries,
-                  age_min, age_max, pixel_id, custom_event_type, ad_account_id, dry_run, yes, as_json):
+                  age_min, age_max, publisher_platforms, instagram_positions, pixel_id,
+                  custom_event_type, ad_account_id, dry_run, yes, as_json):
     """Create an ad set under an existing campaign.
 
     KB: kb/marketing-api.md § 2. Create Ad Set — POST act_{ad_account_id}/adsets
@@ -222,7 +229,7 @@ def adset_create(name, campaign_id, billing_event, optimization_goal, bid_strate
         except json.JSONDecodeError as e:
             raise SystemExit(print_error(f"--targeting is not valid JSON: {e}", code="VALIDATION", as_json=as_json))
     else:
-        targeting_obj = _build_targeting(countries, age_min, age_max)
+        targeting_obj = _build_targeting(countries, age_min, age_max, publisher_platforms, instagram_positions)
         if not targeting_obj.get("geo_locations"):
             raise SystemExit(print_error(
                 "targeting.geo_locations is required — pass --countries or a full --targeting JSON object.",

@@ -855,3 +855,125 @@ class TestInsightsRequestWithRetry:
                 "106391075531104", {"metric": "page_media_view", "period": "day"}, as_json=True,
             )
         assert "distinctive-error-marker" in capsys.readouterr().err
+
+
+class TestCreativeCreateInstagramUserId:
+    """`creative create --instagram-user-id` — attributes an AdCreative to the
+    linked Instagram Business Account by setting
+    object_story_spec.instagram_user_id (the current Graph API field name;
+    NOT the deprecated `instagram_actor_id`). Both cases mock
+    `requests.request` (via `mads_lib.http.requests.request`, the sole
+    transport call) and `mads_lib.http.get_access_token` so `creative create`
+    can run through the full CLI without touching a real credentials file.
+    """
+
+    def _invoke(self, monkeypatch, fake_token, extra_args):
+        captured_calls = []
+
+        def fake_request(method, url, **kwargs):
+            captured_calls.append((method, url, kwargs))
+            return _FakeResponse(status_code=200, json_data={"id": "creative_123"})
+
+        monkeypatch.setattr("mads_lib.http.requests.request", fake_request)
+        monkeypatch.setattr("mads_lib.http.get_access_token", lambda: fake_token)
+
+        result = runner.invoke(cli, [
+            "creative", "create", "Test Creative",
+            "--page-id", "106391075531104",
+            "--link", "https://example.com/?branch=qz3",
+            "--yes",
+            *extra_args,
+        ])
+        return result, captured_calls
+
+    def test_instagram_user_id_flag_sets_object_story_spec_field(self, monkeypatch, fake_token):
+        result, captured_calls = self._invoke(
+            monkeypatch, fake_token, ["--instagram-user-id", "17841437379923247"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert len(captured_calls) == 1
+        _, _, kwargs = captured_calls[0]
+        body = kwargs["json"]
+        assert body["object_story_spec"]["instagram_user_id"] == "17841437379923247"
+
+    def test_instagram_user_id_omitted_is_not_sent_no_regression(self, monkeypatch, fake_token):
+        result, captured_calls = self._invoke(monkeypatch, fake_token, [])
+
+        assert result.exit_code == 0, result.output
+        assert len(captured_calls) == 1
+        _, _, kwargs = captured_calls[0]
+        body = kwargs["json"]
+        assert "instagram_user_id" not in body["object_story_spec"]
+        assert body["object_story_spec"] == {"page_id": "106391075531104", "link_data": body["object_story_spec"]["link_data"]}
+
+
+class TestAdsetCreatePlacementTargeting:
+    """`adset create --publisher-platforms` / `--instagram-positions` —
+    convenience flags feeding `_build_targeting()` alongside the existing
+    countries/age_min/age_max flags. A raw `--targeting` JSON object still
+    fully overrides all convenience flags (matching the pre-existing
+    countries/age_min/age_max override behavior — see `adset_create`'s
+    `if targeting: ... else: _build_targeting(...)` branch).
+    """
+
+    def _invoke(self, monkeypatch, fake_token, extra_args):
+        captured_calls = []
+
+        def fake_request(method, url, **kwargs):
+            captured_calls.append((method, url, kwargs))
+            return _FakeResponse(status_code=200, json_data={"id": "adset_123"})
+
+        monkeypatch.setattr("mads_lib.http.requests.request", fake_request)
+        monkeypatch.setattr("mads_lib.http.get_access_token", lambda: fake_token)
+
+        result = runner.invoke(cli, [
+            "adset", "create", "Test Ad Set",
+            "--campaign-id", "999",
+            "--optimization-goal", "LINK_CLICKS",
+            "--countries", "AE",
+            "--yes",
+            *extra_args,
+        ])
+        return result, captured_calls
+
+    def test_placement_flags_set_targeting_fields(self, monkeypatch, fake_token):
+        result, captured_calls = self._invoke(monkeypatch, fake_token, [
+            "--publisher-platforms", "facebook,instagram",
+            "--instagram-positions", "stream,story,reels",
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert len(captured_calls) == 1
+        _, _, kwargs = captured_calls[0]
+        targeting = kwargs["json"]["targeting"]
+        assert targeting["publisher_platforms"] == ["facebook", "instagram"]
+        assert targeting["instagram_positions"] == ["stream", "story", "reels"]
+        assert targeting["geo_locations"] == {"countries": ["AE"]}
+
+    def test_placement_flags_omitted_no_regression(self, monkeypatch, fake_token):
+        result, captured_calls = self._invoke(monkeypatch, fake_token, [])
+
+        assert result.exit_code == 0, result.output
+        assert len(captured_calls) == 1
+        _, _, kwargs = captured_calls[0]
+        targeting = kwargs["json"]["targeting"]
+        assert "publisher_platforms" not in targeting
+        assert "instagram_positions" not in targeting
+        assert targeting == {"geo_locations": {"countries": ["AE"]}}
+
+    def test_raw_targeting_json_still_overrides_placement_flags(self, monkeypatch, fake_token):
+        raw_targeting = json.dumps({"geo_locations": {"countries": ["US"]}})
+        result, captured_calls = self._invoke(monkeypatch, fake_token, [
+            "--targeting", raw_targeting,
+            "--publisher-platforms", "facebook,instagram",
+            "--instagram-positions", "stream,story",
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert len(captured_calls) == 1
+        _, _, kwargs = captured_calls[0]
+        targeting = kwargs["json"]["targeting"]
+        # Raw --targeting JSON fully overrides all convenience flags — same
+        # pre-existing behavior as --countries/--age-min/--age-max.
+        assert targeting == {"geo_locations": {"countries": ["US"]}}

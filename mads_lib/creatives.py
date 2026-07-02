@@ -189,12 +189,13 @@ def creative_upload_video(file_path, ad_account_id, as_json):
 @click.option("--video-id", default=None, help="From `mads creative upload-video` — builds a video creative instead of a link/image one.")
 @click.option("--thumbnail-hash", default=None, help="Video thumbnail image_hash (video_data.image_hash) — only used with --video-id.")
 @click.option("--cta-type", type=click.Choice(_CALL_TO_ACTION_TYPES), default="SHOP_NOW", help="call_to_action.type.")
+@click.option("--instagram-user-id", default=None, help="Instagram Business Account ID to attribute the creative to (object_story_spec.instagram_user_id).")
 @click.option("--ad-account-id", default=None)
 @click.option("--dry-run", is_flag=True)
 @click.option("--yes", "-y", is_flag=True)
 @click.option("--json", "as_json", is_flag=True)
 def creative_create(name, page_id, link, message, description, headline, image_hash, video_id,
-                     thumbnail_hash, cta_type, ad_account_id, dry_run, yes, as_json):
+                     thumbnail_hash, cta_type, instagram_user_id, ad_account_id, dry_run, yes, as_json):
     """Create an AdCreative (link/image or video) via object_story_spec.
 
     KB: kb/marketing-api.md § 3. Create Ad Creative; § DG-4 Ad Creative Deep
@@ -211,6 +212,8 @@ def creative_create(name, page_id, link, message, description, headline, image_h
     call_to_action = {"type": cta_type, "value": {"link": link}}
 
     object_story_spec = {"page_id": page_id}
+    if instagram_user_id:
+        object_story_spec["instagram_user_id"] = instagram_user_id
     if video_id:
         video_data = {"video_id": video_id, "call_to_action": call_to_action}
         if message:
