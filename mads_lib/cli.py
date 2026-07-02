@@ -63,6 +63,7 @@ from mads_lib.abtest import abtest as abtest_group
 from mads_lib.business import business as business_group
 from mads_lib.pages import page as page_group
 from mads_lib.webhooks import webhooks as webhooks_group
+from mads_lib.whatsapp import whatsapp as whatsapp_group
 
 # NOTE(mads-cli): audiences.py, commerce.py, and capi.py are pure Meta Graph
 # API client function libraries (list_audiences/create_custom_audience/...,
@@ -118,6 +119,11 @@ cli.add_command(page_group)
 # the singular `webhook` to match the naming convention of the other
 # resource groups (campaign/adset/ad/creative/business/page are all singular).
 cli.add_command(webhooks_group, name="webhook")
+# WhatsApp Business Platform (Cloud API) — a SEPARATE Meta product from the
+# Marketing/Graph API resource groups above; see mads_lib/whatsapp.py's module
+# docstring for the WABA/coexistence onboarding prerequisite (not yet done for
+# Talas) and kb/whatsapp-business-platform.md for full command reference.
+cli.add_command(whatsapp_group)
 # audience/commerce/capi/analyze groups are defined further down in this file
 # (they wrap plain function libraries, mirroring gads-cli's `merchant`/
 # `analyze` groups, which are likewise defined in gads_lib/cli.py rather than

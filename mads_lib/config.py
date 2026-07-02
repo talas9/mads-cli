@@ -72,6 +72,16 @@ APP_ID = os.environ.get("META_APP_ID", "")
 APP_SECRET = os.environ.get("META_APP_SECRET", "")
 AD_ACCOUNT_ID = os.environ.get("META_AD_ACCOUNT_ID", "")  # e.g. act_1234567890
 BUSINESS_ID = os.environ.get("META_BUSINESS_ID", "")  # Business Manager ID
+# ── WhatsApp Business Platform (Cloud API) ──────────────────
+# Optional — a separate Meta product from the Marketing/Graph API covered
+# above. Requires a WhatsApp Business Account (WABA) onboarded via the same
+# Meta App (coexistence onboarding for existing numbers is an account-level,
+# Meta-eligibility-gated prerequisite this repo cannot complete for you — see
+# kb/whatsapp-business-platform.md). Left unset by default so mads-cli works
+# fully for users without WhatsApp configured; mads_lib/whatsapp.py fails
+# gracefully with a clear VALIDATION error (not a raw KeyError) when a
+# `whatsapp` command needs it and it isn't set.
+WABA_ID = os.environ.get("META_WABA_ID", "")
 
 # ── Timezone (IANA format, e.g. "Asia/Dubai", "America/New_York") ──
 TZ_NAME = os.environ.get("MADS_TIMEZONE", "UTC")
