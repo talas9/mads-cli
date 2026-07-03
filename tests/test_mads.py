@@ -1318,3 +1318,190 @@ class TestKbCommands:
         assert "KB file not found for: nonexistent-slug" in result.output
         assert "Available slugs:" in result.output
         assert "marketing-api" in result.output
+
+
+class TestAnalyzeAdCopy:
+    """Offline tests for mads_lib/analyze/adcopy.py — the Meta-creative ad-copy
+    compliance checker (mads-cli's analogue of gads-cli's
+    gads_lib/analyze/adcopy.py). Mocks `graph_request` (no network) and
+    `mads_lib.db.DB_PATH` (a real temp-file SQLite DB with a `business_rules`
+    table matching the shared talas-ads schema — see TestChangelogPlatformTag/
+    TestSnapshotDbWrite above for the same monkeypatch approach) so the whole
+    checker runs fully offline.
+    """
+
+    @pytest.fixture
+    def business_rules_db(self, tmp_path, monkeypatch):
+        """Real (temp-file) SQLite DB with the actual live `business_rules`
+        rows relevant to ad-copy validation (rule ids 1, 2, 3, 7, 9 — verified
+        live against data/talas_ads.db before writing this fixture). All real
+        rows are tagged platform='general' (business_rules has no write path
+        from mads-cli, so it never got the platform='meta_ads' tagging that
+        fed0a89 added to changelog/decisions/milestones) — the checker's
+        `_load_rules()` query accounts for this by matching
+        `platform IN ('general', 'meta_ads')`.
+        """
+        db_path = tmp_path / "test_business_rules.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            """CREATE TABLE business_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule TEXT NOT NULL, category TEXT, severity TEXT DEFAULT 'CRITICAL',
+                examples TEXT, platform TEXT DEFAULT 'general'
+            )"""
+        )
+        rows = [
+            (1, "PARTS ONLY — never mention installation, repair, workshop, battery service", "ad_copy", "CRITICAL", "", "general"),
+            (2, "Tesla not EV — always Tesla-specific, never generic EV", "ad_copy", "CRITICAL", "", "general"),
+            (3, "No service-center language", "ad_copy", "CRITICAL", "", "general"),
+            (7, "Phone numbers are branch-specific — never mix", "business", "CRITICAL",
+             "QZ3:+971566662075, SJA:+971501996588, IND4:+971564045033", "general"),
+            (9, "Parts: new + used + aftermarket — NOT OEM only or Genuine only", "ad_copy", "HIGH", "", "general"),
+        ]
+        conn.executemany(
+            "INSERT INTO business_rules (id, rule, category, severity, examples, platform) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr("mads_lib.db.DB_PATH", db_path)
+        return db_path
+
+    @staticmethod
+    def _fake_ad(ad_id, name, message="", description="", headline="", body="", title=""):
+        """Build a Graph API `{act}/ads` row shaped like _AD_FIELDS' expansion."""
+        link_data = {}
+        if message:
+            link_data["message"] = message
+        if description:
+            link_data["description"] = description
+        if headline:
+            link_data["name"] = headline
+        creative = {"id": f"creative_{ad_id}"}
+        if body:
+            creative["body"] = body
+        if title:
+            creative["title"] = title
+        if link_data:
+            creative["object_story_spec"] = {"link_data": link_data}
+        return {
+            "id": ad_id, "name": name, "adset_id": "adset_1", "campaign_id": "campaign_1",
+            "effective_status": "ACTIVE", "creative": creative,
+        }
+
+    def _mock_ads(self, monkeypatch, ads):
+        monkeypatch.setattr(
+            "mads_lib.analyze.adcopy.graph_request",
+            lambda *a, **k: {"data": ads},
+        )
+
+    def test_compliant_ad_passes_clean(self, business_rules_db, monkeypatch):
+        from mads_lib.analyze.adcopy import analyze_adcopy
+
+        # No phone number here on purpose — gads-cli's checker (and this
+        # port) flags *any* UAE phone number appearing in ad copy, even a
+        # correctly-matched branch one (rule 7's "flag + branch match"
+        # design, verified against gads_lib/analyze/adcopy.py's `_check_text`
+        # §4 — it unconditionally appends a violation whenever the phone
+        # regex matches, branch or no branch). "Compliant" here means no
+        # detector fires at all.
+        ad = self._fake_ad(
+            "ad_1", "Tesla Parts QZ3",
+            message="Genuine, used and aftermarket Tesla parts in stock.",
+            description="Shop Tesla parts online today.",
+            headline="Tesla Parts — QZ3",
+        )
+        self._mock_ads(monkeypatch, [ad])
+
+        result = analyze_adcopy(ad_account_id="act_1234567890")
+
+        assert result["rules_loaded"] == 5
+        assert len(result["ads"]) == 1
+        assert result["ads"][0]["violations"] == []
+        assert result["violations_summary"] == {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+
+    def test_ev_instead_of_tesla_flags(self, business_rules_db, monkeypatch):
+        from mads_lib.analyze.adcopy import analyze_adcopy
+
+        ad = self._fake_ad("ad_2", "EV Parts Specialist", message="EV Parts Specialist — shop now.")
+        self._mock_ads(monkeypatch, [ad])
+
+        result = analyze_adcopy(ad_account_id="act_1234567890")
+
+        violations = result["ads"][0]["violations"]
+        kinds = {v["kind"] for v in violations}
+        assert "ev_not_tesla" in kinds
+        assert result["violations_summary"]["CRITICAL"] >= 1
+
+    def test_install_repair_workshop_language_flags(self, business_rules_db, monkeypatch):
+        from mads_lib.analyze.adcopy import analyze_adcopy
+
+        ad = self._fake_ad(
+            "ad_3", "Tesla Service",
+            message="Tesla battery service and installation available at our workshop.",
+        )
+        self._mock_ads(monkeypatch, [ad])
+
+        result = analyze_adcopy(ad_account_id="act_1234567890")
+
+        violations = result["ads"][0]["violations"]
+        kinds = {v["kind"] for v in violations}
+        assert "install_repair_language" in kinds
+        assert result["violations_summary"]["CRITICAL"] >= 1
+
+    def test_mismatched_branch_phone_number_flags(self, business_rules_db, monkeypatch):
+        from mads_lib.analyze.adcopy import analyze_adcopy
+
+        # ad_group scoped as adset_1/campaign_1, which the fixture treats as
+        # QZ3, but the copy carries IND4's number (971564045033) — a mixed
+        # branch phone number, exactly what rule 7 forbids.
+        ad = self._fake_ad(
+            "ad_4", "Tesla Parts QZ3",
+            message="Tesla parts in stock.",
+            description="Call us at +971564045033 today.",
+        )
+        self._mock_ads(monkeypatch, [ad])
+
+        result = analyze_adcopy(ad_account_id="act_1234567890")
+
+        violations = result["ads"][0]["violations"]
+        phone_violations = [v for v in violations if v["kind"] == "phone_in_copy"]
+        assert len(phone_violations) == 1
+        assert "IND4" in phone_violations[0]["rule"]
+        assert result["violations_summary"]["CRITICAL"] >= 1
+
+    def test_oem_only_genuine_only_flags(self, business_rules_db, monkeypatch):
+        from mads_lib.analyze.adcopy import analyze_adcopy
+
+        ad = self._fake_ad(
+            "ad_5", "Tesla Parts", message="Genuine only Tesla parts — no aftermarket.",
+        )
+        self._mock_ads(monkeypatch, [ad])
+
+        result = analyze_adcopy(ad_account_id="act_1234567890")
+
+        violations = result["ads"][0]["violations"]
+        kinds = {v["kind"] for v in violations}
+        assert "oem_genuine_only" in kinds
+        assert result["violations_summary"]["HIGH"] >= 1
+
+    def test_ad_copy_cli_json_scoped_by_campaign(self, business_rules_db, monkeypatch):
+        """Sanity check the `analyze ad-copy` Click wiring end-to-end, including
+        --campaign-id scoping (routes to `{campaign_id}/ads`, not `{act}/ads`).
+        """
+        captured_paths = []
+
+        def fake_graph_request(method, path, **kwargs):
+            captured_paths.append(path)
+            return {"data": [self._fake_ad("ad_6", "Tesla Parts", message="EV only.")]}
+
+        monkeypatch.setattr("mads_lib.analyze.adcopy.graph_request", fake_graph_request)
+
+        result = runner.invoke(cli, ["analyze", "ad-copy", "--campaign-id", "campaign_99", "--json"])
+
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        assert body["scope"]["campaign_id"] == "campaign_99"
+        assert captured_paths == ["campaign_99/ads"]
+        assert body["violations_summary"]["CRITICAL"] >= 1

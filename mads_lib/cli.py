@@ -1415,7 +1415,7 @@ def capi_hash_user_data(user_data_json, already_hashed, as_json):
 
 @cli.group()
 def analyze():
-    """Read-only analysis: audit, budget pacing, creative fatigue, audience overlap, placements."""
+    """Read-only analysis: audit, budget pacing, creative fatigue, audience overlap, placements, ad copy."""
     pass
 
 
@@ -1468,6 +1468,19 @@ def analyze_audience_overlap_cmd(ad_account_id, as_json):
     from mads_lib.analyze.audience_overlap import analyze_audience_overlap, render_audience_overlap
     result = analyze_audience_overlap(ad_account_id=ad_account_id)
     render_audience_overlap(result, as_json=as_json)
+
+
+@analyze.command("ad-copy")
+@click.option("--ad-account-id", default=None)
+@click.option("--campaign-id", default=None, help="Restrict to one campaign's ads.")
+@click.option("--adset-id", default=None, help="Restrict to one ad set's ads (wins over --campaign-id).")
+@click.option("--violations-only", is_flag=True, help="Only show ads with rule violations.")
+@click.option("--json", "as_json", is_flag=True)
+def analyze_adcopy_cmd(ad_account_id, campaign_id, adset_id, violations_only, as_json):
+    """Validate Meta ad creative text against Talas business rules (PARTS ONLY, Tesla-not-EV, branch phones)."""
+    from mads_lib.analyze.adcopy import analyze_adcopy, render_adcopy
+    result = analyze_adcopy(ad_account_id=ad_account_id, campaign_id=campaign_id, adset_id=adset_id)
+    render_adcopy(result, as_json=as_json, violations_only=violations_only)
 
 
 @analyze.command("placement-breakdown")
