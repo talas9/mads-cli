@@ -114,14 +114,40 @@ can share one changelog table/DB when pointed at the same `MADS_DB_PATH` / `GADS
 
 Writes happen through the named resource commands (`campaign create/status/budget/delete`,
 `adset create/status/budget/delete`, `ad create/status/budget/delete`, `creative create`,
-`webhook subscribe/unsubscribe`) or the generic `mutate`/`batch-mutate` escape hatch. Run
-`tools/mads catalog --json` for the full set with parameter schemas.
+`webhook subscribe/unsubscribe`, `post create/create-ig/delete`, `comment reply/hide/delete`,
+`page update`, `audience create/upload-users/delete`, `commerce create-catalog/create-feed/
+upload-feed/create-product/batch-update`, `capi send-event`, `abtest create`) or the generic
+`mutate`/`batch-mutate` escape hatch. Run `tools/mads catalog --json` for the full set with
+parameter schemas.
 
 **Discipline — always follow this order:**
 
 1. `tools/mads snapshot` — capture current state before any change
 2. Run the mutation command (all support `--dry-run` and `--yes`)
 3. `tools/mads log` — record what was done and why
+
+### Agent Enforcement (optional)
+
+Every mutating command above calls `enforce_allowed_caller()`
+(`mads_lib/cli.py`) as its first statement — an `os.environ`-only gate with
+zero Click dependency, mirroring gads-cli's `enforce_allowed_caller()`
+(`gads_lib/cli.py`) exactly, under a mads-prefixed env-var namespace so the
+two CLIs never collide:
+
+```bash
+MADS_ENFORCE_CALLER=1
+MADS_EXPECTED_CALLER=my-operator-agent
+MADS_CALLER_AGENT=my-operator-agent  # Set by the calling agent
+```
+
+Disabled by default (no env vars set → every call is a no-op). When
+`MADS_ENFORCE_CALLER=1`, a mutating command exits 1 *before* any Graph API
+call is attempted unless `MADS_CALLER_AGENT` exactly matches
+`MADS_EXPECTED_CALLER` (default `meta-platform-operator` if unset). Read-only
+commands (`list`, `info`, `query`, etc.) are unaffected — this gate exists to
+let a delegation-model orchestrator (e.g. an adops-manager style caller)
+restrict which agent identity is allowed to actually mutate the live Meta ad
+account, not to gate read access.
 
 ## Invocation
 

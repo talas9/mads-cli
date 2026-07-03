@@ -84,8 +84,9 @@ def _auto_log(action, details, campaign_name="", campaign_id=""):
         }
         conn.execute(
             "INSERT INTO changelog (timestamp, action, campaign, campaign_id, details, "
-            "reason, agent, snapshot_ref, script, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", json.dumps(raw)),
+            "reason, agent, snapshot_ref, script, raw_json, platform) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", json.dumps(raw), "meta_ads"),
         )
         conn.commit()
         conn.close()
@@ -149,6 +150,8 @@ def ad_create(name, adset_id, creative_id, creative_spec, status, ad_account_id,
 
     KB: kb/marketing-api.md § 4. Create Ad — POST act_{ad_account_id}/ads
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     if not creative_id and not creative_spec:
         raise SystemExit(print_error(
             "Provide --creative-id (existing AdCreative) or --creative-spec (inline JSON).",
@@ -188,6 +191,8 @@ def ad_status(ad_id, status, dry_run, yes, as_json):
 
     KB: kb/marketing-api.md § 6. Update (partial) — POST /{node_id}
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     status = status.upper()
     if not _confirm_and_log(f"ad {ad_id} → {status}", "status change", dry_run, yes):
         return
@@ -214,6 +219,8 @@ def ad_budget(ad_id, amount, dry_run, yes, as_json):
     delete) — prefer `mads adset budget` / `mads adset create --bid-strategy`
     for real bidding control.
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     if not _confirm_and_log(f"ad {ad_id} bid_amount → {amount}", "legacy ad-level bid", dry_run, yes):
         return
     result = graph_request("POST", ad_id, json_body={"bid_amount": amount}, as_json=as_json)
@@ -237,6 +244,8 @@ def ad_delete(ad_id, hard, dry_run, yes, as_json):
 
     KB: kb/marketing-api.md § 7. Remove / Delete a node.
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     action = f"{'HARD ' if hard else ''}delete ad {ad_id}"
     if not _confirm_and_log(action, "delete", dry_run, yes):
         return

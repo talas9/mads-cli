@@ -114,8 +114,9 @@ def _auto_log(action, details, campaign_name="", campaign_id=""):
         }
         conn.execute(
             "INSERT INTO changelog (timestamp, action, campaign, campaign_id, details, "
-            "reason, agent, snapshot_ref, script, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", json.dumps(raw)),
+            "reason, agent, snapshot_ref, script, raw_json, platform) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", json.dumps(raw), "meta_ads"),
         )
         conn.commit()
         conn.close()
@@ -199,6 +200,8 @@ def campaign_create(name, objective, status, special_ad_categories, buying_type,
 
     KB: kb/marketing-api.md § 1. Create Campaign — POST act_{ad_account_id}/campaigns
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     act = _require_act_id(ad_account_id, as_json)
     if daily_budget is not None and lifetime_budget is not None:
         raise SystemExit(print_error(
@@ -249,6 +252,8 @@ def campaign_status(campaign_id, status, dry_run, yes, as_json):
 
     KB: kb/marketing-api.md § 6. Update (partial) — POST /{node_id}
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     status = status.upper()
     if not _confirm_and_log(f"campaign {campaign_id} → {status}", "status change", dry_run, yes):
         return
@@ -275,6 +280,8 @@ def campaign_budget(campaign_id, amount, lifetime, minor_units, dry_run, yes, as
     `lifetime_budget` (Gotcha #5: mutually exclusive on the same object — a
     CBO campaign holds the budget and its child ad sets should not also set one).
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     field = "lifetime_budget" if lifetime else "daily_budget"
     value = str(int(amount)) if minor_units else _minor_units(amount)
     if not _confirm_and_log(f"campaign {campaign_id} {field} → {amount}", "budget change", dry_run, yes):
@@ -302,6 +309,8 @@ def campaign_delete(campaign_id, hard, dry_run, yes, as_json):
 
     KB: kb/marketing-api.md § 7. Remove / Delete a node.
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     action = f"{'HARD ' if hard else ''}delete campaign {campaign_id}"
     if not _confirm_and_log(action, "delete", dry_run, yes):
         return

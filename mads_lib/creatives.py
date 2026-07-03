@@ -102,8 +102,9 @@ def _auto_log(action, details, campaign_name="", campaign_id=""):
         }
         conn.execute(
             "INSERT INTO changelog (timestamp, action, campaign, campaign_id, details, "
-            "reason, agent, snapshot_ref, script, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", json.dumps(raw)),
+            "reason, agent, snapshot_ref, script, raw_json, platform) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", json.dumps(raw), "meta_ads"),
         )
         conn.commit()
         conn.close()
@@ -203,6 +204,8 @@ def creative_create(name, page_id, link, message, description, headline, image_h
     are almost entirely spec objects — even a "simple" text/image ad nests
     through object_story_spec.link_data.
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     if not page_id:
         raise SystemExit(print_error(
             "No Page ID — pass --page-id or set META_PAGE_ID.", code="VALIDATION", as_json=as_json,

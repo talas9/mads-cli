@@ -102,8 +102,9 @@ def _auto_log(action, details, campaign_name="", campaign_id=""):
         }
         conn.execute(
             "INSERT INTO changelog (timestamp, action, campaign, campaign_id, details, "
-            "reason, agent, snapshot_ref, script, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", json.dumps(raw)),
+            "reason, agent, snapshot_ref, script, raw_json, platform) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", json.dumps(raw), "meta_ads"),
         )
         conn.commit()
         conn.close()
@@ -217,6 +218,8 @@ def adset_create(name, campaign_id, billing_event, optimization_goal, bid_strate
 
     KB: kb/marketing-api.md § 2. Create Ad Set — POST act_{ad_account_id}/adsets
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     if daily_budget is not None and lifetime_budget is not None:
         raise SystemExit(print_error(
             "--daily-budget and --lifetime-budget are mutually exclusive.",
@@ -281,6 +284,8 @@ def adset_status(adset_id, status, dry_run, yes, as_json):
 
     KB: kb/marketing-api.md § 6. Update (partial) — POST /{node_id}
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     status = status.upper()
     if not _confirm_and_log(f"ad set {adset_id} → {status}", "status change", dry_run, yes):
         return
@@ -306,6 +311,8 @@ def adset_budget(adset_id, amount, lifetime, minor_units, dry_run, yes, as_json)
     KB: kb/marketing-api.md § 6. Update (partial); Gotcha #5 — do not also set a
     budget here if the parent Campaign uses Campaign Budget Optimization (CBO).
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     field = "lifetime_budget" if lifetime else "daily_budget"
     value = str(int(amount)) if minor_units else _minor_units(amount)
     if not _confirm_and_log(f"ad set {adset_id} {field} → {amount}", "budget change", dry_run, yes):
@@ -331,6 +338,8 @@ def adset_delete(adset_id, hard, dry_run, yes, as_json):
 
     KB: kb/marketing-api.md § 7. Remove / Delete a node.
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     action = f"{'HARD ' if hard else ''}delete ad set {adset_id}"
     if not _confirm_and_log(action, "delete", dry_run, yes):
         return

@@ -88,6 +88,8 @@ def webhooks_subscribe(account_id, app_id, as_json):
     object type + a verified callback URL in the App Dashboard — this call only performs
     the per-ad-account subscription step, it does not configure the App Dashboard side.
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     acct = _require_account_id(account_id, as_json)
     aid = app_id or APP_ID
     if not aid:
@@ -127,6 +129,8 @@ def webhooks_unsubscribe(account_id, app_id, as_json):
     shown there) — see module docstring for the standard-Graph-API-convention caveat. Run
     `webhooks list` afterward to confirm the subscription is actually gone.
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     acct = _require_account_id(account_id, as_json)
     aid = app_id or APP_ID
     params = {}

@@ -190,8 +190,9 @@ def _auto_log(action, details, campaign_name="", campaign_id=""):
         }
         conn.execute(
             "INSERT INTO changelog (timestamp, action, campaign, campaign_id, details, "
-            "reason, agent, snapshot_ref, script, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", json.dumps(raw)),
+            "reason, agent, snapshot_ref, script, raw_json, platform) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", json.dumps(raw), "meta_ads"),
         )
         conn.commit()
         conn.close()
@@ -297,6 +298,8 @@ def page_update(page_id, about, phone, website, hours_json, description, dry_run
     Requires `pages_manage_metadata` — see AGENTS.md Known Gotchas for the current
     permission-grant status on this account before expecting this to succeed live.
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     hours = None
     if hours_json:
         try:

@@ -15,6 +15,7 @@ structured-error-envelope `main()` entry point.
 """
 
 import json as _json
+import os
 import shutil
 import sys
 from datetime import datetime
@@ -132,6 +133,30 @@ cli.add_command(whatsapp_group)
 # in the wrapped modules) and registered at the bottom of the module.
 
 
+def enforce_allowed_caller():
+    """Optional caller enforcement for agent delegation models.
+
+    Mirrors gads-cli's `enforce_allowed_caller()` (gads_lib/cli.py) exactly,
+    with a mads-prefixed env-var namespace so the two CLIs never collide:
+    MADS_ENFORCE_CALLER / MADS_EXPECTED_CALLER / MADS_CALLER_AGENT instead of
+    GADS_*. os.environ-only gate, no Click dependency — safe to call from any
+    resource-group module (campaigns.py, adsets.py, ads.py, creatives.py,
+    webhooks.py, pages.py, abtest.py) via a local `from mads_lib.cli import
+    enforce_allowed_caller` inside the command function, avoiding a circular
+    top-level import (this module imports those modules' Click groups).
+    """
+    if os.environ.get("MADS_ENFORCE_CALLER") != "1":
+        return
+    expected = os.environ.get("MADS_EXPECTED_CALLER", "meta-platform-operator")
+    caller = os.environ.get("MADS_CALLER_AGENT", "")
+    if caller != expected:
+        click.secho(
+            f"✗ mads is restricted to the '{expected}' agent when MADS_ENFORCE_CALLER=1",
+            fg="red", err=True,
+        )
+        raise SystemExit(1)
+
+
 # ── Helpers ──────────────────────────────────────────────────
 
 
@@ -164,8 +189,9 @@ def _auto_log(action, details, campaign_name="", campaign_id=""):
         }
         conn.execute(
             "INSERT INTO changelog (timestamp, action, campaign, campaign_id, details, "
-            "reason, agent, snapshot_ref, script, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", _json.dumps(raw)),
+            "reason, agent, snapshot_ref, script, raw_json, platform) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, action, campaign_name, campaign_id, details, "", "mads-cli", "", "", _json.dumps(raw), "meta_ads"),
         )
         conn.commit()
         conn.close()
@@ -525,9 +551,9 @@ def log(action, details, reason, campaign, campaign_id, agent, snapshot_ref, scr
     try:
         conn.execute(
             """INSERT INTO changelog
-            (timestamp, action, campaign, campaign_id, details, reason, agent, snapshot_ref, script, raw_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (ts, action, campaign, campaign_id, details, reason, agent, snapshot_ref, script, _json.dumps(raw)),
+            (timestamp, action, campaign, campaign_id, details, reason, agent, snapshot_ref, script, raw_json, platform)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ts, action, campaign, campaign_id, details, reason, agent, snapshot_ref, script, _json.dumps(raw), "meta_ads"),
         )
         conn.commit()
         if as_json:
@@ -684,6 +710,7 @@ def mutate_single(resource_type, operations_json, dry_run, yes, as_json):
     'act_1234567890/campaigns'). `operations_json` is a JSON object of POST
     body params, or a JSON array of such objects for sequential calls.
     """
+    enforce_allowed_caller()
     try:
         ops = _json.loads(operations_json)
     except _json.JSONDecodeError as e:
@@ -734,6 +761,7 @@ def batch_mutate_cmd(operations_json, dry_run, yes, as_json):
     Meta's hard 50-operation batch limit is enforced client-side by
     http.batch_request().
     """
+    enforce_allowed_caller()
     try:
         ops = _json.loads(operations_json)
     except _json.JSONDecodeError as e:
@@ -887,6 +915,7 @@ def audience_list(ad_account_id, fields, limit, after, as_json):
 @click.option("--json", "as_json", is_flag=True)
 def audience_create(name, customer_file_source, description, subtype, ad_account_id, dry_run, yes, as_json):
     """Create a Custom Audience."""
+    enforce_allowed_caller()
     if not _confirm_and_log(f"create audience '{name}' [{subtype}]", "audience create", dry_run, yes):
         return
     result = _audiences.create_custom_audience(
@@ -947,6 +976,7 @@ def audience_upload_users(custom_audience_id, schema, rows_json, already_hashed,
     SCHEMA is comma-separated (e.g. "EMAIL,FN,LN"). ROWS_JSON is a JSON array
     of arrays, each inner array a record aligned to SCHEMA order.
     """
+    enforce_allowed_caller()
     try:
         rows = _json.loads(rows_json)
     except _json.JSONDecodeError as e:
@@ -977,6 +1007,7 @@ def audience_upload_users(custom_audience_id, schema, rows_json, already_hashed,
 @click.option("--json", "as_json", is_flag=True)
 def audience_delete(audience_id, dry_run, yes, as_json):
     """Delete a Custom/Lookalike Audience."""
+    enforce_allowed_caller()
     if not _confirm_and_log(f"delete audience {audience_id}", "audience delete", dry_run, yes):
         return
     result = _audiences.delete_audience(audience_id, as_json=as_json)
@@ -1011,6 +1042,7 @@ def commerce():
 def commerce_create_catalog(name, vertical, business_id, business_metadata, parent_catalog_id,
                              catalog_segment_filter, dry_run, yes, as_json):
     """Create a ProductCatalog owned by a Business Manager."""
+    enforce_allowed_caller()
     meta = None
     if business_metadata:
         try:
@@ -1048,6 +1080,7 @@ def commerce_create_catalog(name, vertical, business_id, business_metadata, pare
 def commerce_create_feed(catalog_id, name, feed_type, country, default_currency, deletion_enabled,
                           delimiter, encoding, schedule, update_schedule, dry_run, yes, as_json):
     """Create a ProductFeed under a catalog."""
+    enforce_allowed_caller()
     if not _confirm_and_log(f"create feed '{name}' on catalog {catalog_id}", "commerce create-feed", dry_run, yes):
         return
     result = _commerce.create_product_feed(
@@ -1072,6 +1105,7 @@ def commerce_create_feed(catalog_id, name, feed_type, country, default_currency,
 @click.option("--json", "as_json", is_flag=True)
 def commerce_upload_feed(feed_id, url, file_path, dry_run, yes, as_json):
     """Trigger a one-off feed upload (pass exactly one of --url or --file)."""
+    enforce_allowed_caller()
     if bool(url) == bool(file_path):
         raise SystemExit(print_error("Pass exactly one of --url or --file.", code="VALIDATION", as_json=as_json))
     if not _confirm_and_log(f"upload feed {feed_id}", "commerce upload-feed", dry_run, yes):
@@ -1118,6 +1152,7 @@ def commerce_create_product(catalog_id, retailer_id, name, currency, price, imag
                              visibility, commerce_tax_category, additional_image_urls,
                              custom_labels, dry_run, yes, as_json):
     """Create (or upsert) a single ProductItem directly. PRICE is in minor units (e.g. 599 = 5.99)."""
+    enforce_allowed_caller()
     if not _confirm_and_log(f"create product '{retailer_id}' on catalog {catalog_id}", "commerce create-product", dry_run, yes):
         return
     result = _commerce.create_product(
@@ -1178,6 +1213,7 @@ def commerce_list_products(catalog_id, fields, limit, after, filter_json, error_
 def commerce_batch_update(catalog_id, operations_json, item_type, allow_upsert, dry_run, yes, as_json):
     """Bulk create/update/delete catalog items. OPERATIONS_JSON is a JSON array of
     {"method": "CREATE"|"UPDATE"|"DELETE", "data": {...}} objects (max 5000)."""
+    enforce_allowed_caller()
     try:
         operations = _json.loads(operations_json)
     except _json.JSONDecodeError as e:
@@ -1301,6 +1337,7 @@ def capi_send_event(pixel_id, events_json, test_event_code, namespace_id, partne
     EVENTS_JSON is a JSON array of event objects, each needing at minimum
     event_name, event_time, user_data, action_source.
     """
+    enforce_allowed_caller()
     try:
         events = _json.loads(events_json)
     except _json.JSONDecodeError as e:
@@ -1475,6 +1512,7 @@ def post():
 @click.option("--json", "as_json", is_flag=True)
 def post_create(page_id, message, caption_file, link, schedule_time, dry_run, yes, as_json):
     """POST /{page-id}/feed — create a Facebook Page post. Requires `pages_manage_posts`."""
+    enforce_allowed_caller()
     if message and caption_file:
         raise SystemExit(print_error("Pass at most one of --message/--caption-file.", code="VALIDATION", as_json=as_json))
     if caption_file:
@@ -1519,6 +1557,7 @@ def post_create_ig(ig_account_id, page_id, caption, caption_file, image_url, vid
     `creation_id` so it isn't silently lost — Meta expires unpublished containers ~24h
     after creation.
     """
+    enforce_allowed_caller()
     if caption and caption_file:
         raise SystemExit(print_error("Pass at most one of --caption/--caption-file.", code="VALIDATION", as_json=as_json))
     if caption_file:
@@ -1592,6 +1631,7 @@ def post_list(page_id, ig_account_id, limit, as_json):
 @click.option("--json", "as_json", is_flag=True)
 def post_delete(post_id, page_id, dry_run, yes, as_json):
     """DELETE /{post-id} — delete a Facebook Page post (FB only, see posts.delete_post())."""
+    enforce_allowed_caller()
     if not _confirm_and_log(f"delete post {post_id}", "post delete", dry_run, yes):
         return
     result = _posts.delete_post(post_id, page_id, as_json=as_json)
@@ -1644,6 +1684,7 @@ def comment_list(post_id, media_id, limit, as_json):
 @click.option("--json", "as_json", is_flag=True)
 def comment_reply(post_id, comment_id, message, dry_run, yes, as_json):
     """Post a new top-level FB comment (--post-id) or a threaded reply (--comment-id)."""
+    enforce_allowed_caller()
     if bool(post_id) == bool(comment_id):
         raise SystemExit(print_error("Pass exactly one of --post-id/--comment-id.", code="VALIDATION", as_json=as_json))
 
@@ -1669,6 +1710,7 @@ def comment_reply(post_id, comment_id, message, dry_run, yes, as_json):
 @click.option("--json", "as_json", is_flag=True)
 def comment_hide(comment_id, unhide, dry_run, yes, as_json):
     """POST /{comment-id} with is_hidden — hide or unhide a comment."""
+    enforce_allowed_caller()
     action = "unhide" if unhide else "hide"
     if not _confirm_and_log(f"{action} comment {comment_id}", f"comment {action}", dry_run, yes):
         return
@@ -1687,6 +1729,7 @@ def comment_hide(comment_id, unhide, dry_run, yes, as_json):
 @click.option("--json", "as_json", is_flag=True)
 def comment_delete(comment_id, dry_run, yes, as_json):
     """DELETE /{comment-id} — permanently delete a comment."""
+    enforce_allowed_caller()
     if not _confirm_and_log(f"delete comment {comment_id}", "comment delete", dry_run, yes):
         return
     result = _comments.delete_comment(comment_id, as_json=as_json)

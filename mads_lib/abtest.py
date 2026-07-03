@@ -83,6 +83,8 @@ def abtest_create(name, description, study_type, start_time, end_time, cells, bu
     Limits (marketing-api.md): max 100 concurrent studies, max 150 cells/study, max 100 ad
     entities/cell.
     """
+    from .cli import enforce_allowed_caller
+    enforce_allowed_caller()
     try:
         cells_obj = _json.loads(cells)
     except _json.JSONDecodeError as e:
