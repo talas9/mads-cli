@@ -16,6 +16,13 @@ no dedicated module is needed for that and none is added here.
 
 ## What this module does
 
+**This module is management/analytics-only by design, not a messaging integration.** It
+deliberately does NOT wrap `POST /{phone-number-id}/messages` (sending template or free-form
+messages) — that endpoint requires the separate `whatsapp_business_messaging` OAuth scope, which
+Talas doesn't need. Every command below needs only `whatsapp_business_management` (see
+"Configuration" below), covering WABA/phone-number reads, message-template list/create, and
+account-level webhook subscription for template/quality-rating change notifications.
+
 `mads whatsapp` wraps the following Cloud API endpoints:
 
 | Command | Endpoint | Purpose |
@@ -25,7 +32,6 @@ no dedicated module is needed for that and none is added here.
 | `phone-number info` | `GET /{phone-number-id}` | A single phone number's status/quality rating |
 | `template list` | `GET /{waba-id}/message_templates` | List message templates + their review status |
 | `template create` | `POST /{waba-id}/message_templates` | Submit a new message template for Meta review |
-| `send` | `POST /{phone-number-id}/messages` | Send a template or free-form session message |
 | `webhook subscribe` | `POST /{app-id}/subscriptions` | Subscribe the app to inbound-message/status webhooks |
 
 Every command accepts `--json`/fails with the same structured error envelope + stable exit codes
@@ -56,22 +62,6 @@ WhatsApp live for Talas** — it builds the code path assuming the account-level
 a prerequisite someone completes separately, then configures `META_WABA_ID` (and, per branch once
 coexistence is done, likely one `--phone-number-id` per branch) to actually use it.
 
-## The 24-hour customer-service window
-
-Cloud API enforces a hard rule on **who can receive a free-form (non-template) message**: only a
-customer who has messaged the business within the last 24 hours. That window opens on the
-customer's inbound message and closes 24h after their *most recent* inbound message. Outside that
-window, **only pre-approved message templates** (see `template list`/`template create`) may be
-sent — Meta rejects a free-form send outside the window server-side.
-
-`mads whatsapp send` defaults to **template-only** sends for this reason:
-
-- `--template-name` (the default/recommended path) sends an approved template — works any time.
-- `--text` (a free-form session message) additionally requires `--confirm-24h-window` — an
-  explicit human acknowledgement, since this CLI has **no client-side way to know** whether a
-  given recipient's 24h window is currently open (Meta enforces it server-side; there is no
-  "check window status" endpoint to pre-flight this against).
-
 ## Conversation Analytics is deprecated — use `pricing_analytics`
 
 The old **Conversation Analytics API** (per-conversation, per-pricing-category message-volume
@@ -83,7 +73,7 @@ conversations did we have" the same way the old API did; it answers "what did we
 and why," at message granularity.
 
 **No command in this module wraps `pricing_analytics` yet** — this pass covers WABA/phone-number
-read, template list/create, message send, and app webhook subscribe only. Add a dedicated command
+read, template list/create, and app webhook subscribe only. Add a dedicated command
 for `pricing_analytics` as a follow-up if/when message-cost reporting is actually needed; do not
 resurrect a "Conversation Analytics" command — it is dead.
 
@@ -94,6 +84,12 @@ resurrect a "Conversation Analytics" command — it is dead.
 | `META_APP_ID` | Already required by the rest of mads-cli | Same Meta App the WABA is (or will be) onboarded under |
 | `META_APP_SECRET` | Already required by the rest of mads-cli | Used for `webhook subscribe`'s App Access Token (`app_id\|app_secret`) |
 | `META_WABA_ID` | **Optional** — new in this module | The onboarded WABA's numeric ID. Commands needing it fail gracefully (`VALIDATION`, not a crash) when unset. |
+
+Only the `whatsapp_business_management` OAuth scope is needed for every command in this module —
+it covers WABA/phone-number reads, template management, and account-level webhook subscription.
+`whatsapp_business_messaging` (the separate scope required for sending/receiving messages via
+`POST /{phone-number-id}/messages`) is intentionally never requested, since this module doesn't
+send or receive messages. See `generate_token.py`'s `SCOPES` list.
 
 `META_WABA_ID` is deliberately **not** added to `mads doctor`'s required-check set or any
 existing-command's validation path — it is additive, WhatsApp-only config that must never break
@@ -113,13 +109,7 @@ mads whatsapp template create NAME CATEGORY LANGUAGE COMPONENTS_JSON \
     # CATEGORY: AUTHENTICATION | MARKETING | UTILITY
     # COMPONENTS_JSON: JSON array of template components, e.g.
     #   '[{"type":"BODY","text":"Your order {{1}} has shipped."}]'
-    # Submits for Meta review — not immediately sendable; check `status` via `template list`.
-
-mads whatsapp send PHONE_NUMBER_ID TO \
-    [--template-name NAME --template-language en_US --template-components JSON] \
-    [--text BODY --confirm-24h-window] \
-    [--dry-run] [-y/--yes] [--json]
-    # Exactly one of --template-name or --text is required.
+    # Submits for Meta review — not immediately approved; check `status` via `template list`.
 
 mads whatsapp webhook subscribe --callback-url URL --verify-token TOKEN \
     [--app-id ID] [--fields messages] [--json]
@@ -135,7 +125,7 @@ mads whatsapp webhook subscribe --callback-url URL --verify-token TOKEN \
 **Not live-tested.** There is no WABA configured for Talas (`META_WABA_ID` unset, no coexistence
 onboarding done for QZ3/IND4/SJA) as of this doc's writing (2026-07-02) — every command above has
 been exercised only against `--help` output and the pre-flight `VALIDATION` error path (missing
-`META_WABA_ID`), never against a real WABA/phone number/template/send call. Endpoint shapes
+`META_WABA_ID`), never against a real WABA/phone number/template call. Endpoint shapes
 (field names, request bodies) follow the standard, long-documented WhatsApp Business Platform
 Cloud API surface, matching this repo's existing `API_VERSION` convention — but treat them as
 [inference from stable public Meta API convention, NOT live-verified in this pass] until run

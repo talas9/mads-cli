@@ -1,4 +1,4 @@
-"""WhatsApp Business Platform (Cloud API) — waba/phone-number/template/send/webhook commands.
+"""WhatsApp Business Platform (Cloud API) — waba/phone-number/template/webhook commands.
 
 **This is a SEPARATE Meta product from the Marketing API / Graph API surface the rest of
 mads-cli covers (campaigns/ad sets/ads/creatives/audiences/commerce/CAPI/pages/business).**
@@ -9,6 +9,15 @@ WhatsApp Business Account, "WABA"), and its own endpoint family under the same
 NOT touch WhatsApp click-to-chat ad destinations (those already work today via the normal
 `ad`/`creative` commands and a `wa.me`/`whatsapp://` destination URL — no special module
 needed for that).
+
+**This module is management/analytics-only by design, not a messaging integration.** It
+wraps WABA/phone-number reads, message-template list/create, and account-level webhook
+subscription (template/quality-rating change notifications) — it deliberately does NOT wrap
+`POST /{phone-number-id}/messages` (sending template or free-form messages). That endpoint
+requires the separate `whatsapp_business_messaging` OAuth scope; every command in this
+module needs only `whatsapp_business_management`, which is all Talas has ever needed
+(reading template/quality-rating/WABA state, not sending or receiving messages). See
+`kb/whatsapp-business-platform.md` for the scope rationale.
 
 ## Prerequisite: WABA + coexistence onboarding — NOT YET DONE for Talas
 
@@ -30,16 +39,6 @@ satisfied — running any command that needs `--waba-id` today will fail with a 
 VALIDATION error (`META_WABA_ID is not set`), not a crash, because `WABA_ID` is optional
 config (see `config.py`). **The code existing here does not make WhatsApp live for Talas.**
 
-## The 24-hour customer-service window
-
-Cloud API only allows **free-form (non-template) messages** to be sent within a 24-hour
-window that opens when the customer sends an inbound message, and closes 24h after their
-*last* inbound message. Outside that window, only **pre-approved message templates** may
-be sent (`template list`/`template create` below). `whatsapp send` defaults to
-template-only sends for this reason — sending free-form text (`--text`) requires the
-explicit `--confirm-24h-window` flag, since this CLI has no way to verify window state
-client-side (Meta enforces it server-side and will reject an out-of-window free-form send).
-
 ## Conversation Analytics is deprecated — use `pricing_analytics`
 
 The old "Conversation Analytics" API (per-conversation, per-category message-volume
@@ -49,8 +48,8 @@ shift from per-conversation to per-message pricing). Its replacement,
 drop-in message counter — do not assume it answers "how many conversations did we have"
 the same way the old API did. No `whatsapp` command in this module wraps
 `pricing_analytics` yet (out of scope for this pass — this module covers WABA/phone-number
-read, template list/create, message send, and webhook subscribe only); add it as a
-dedicated command if/when message-cost reporting is needed.
+read, template list/create, and webhook subscribe only); add it as a dedicated command
+if/when message-cost reporting is needed.
 
 ## Endpoints wrapped here
 
@@ -59,7 +58,6 @@ dedicated command if/when message-cost reporting is needed.
   - `GET  /{phone-number-id}` — phone number details/status             → `phone-number info`
   - `GET  /{waba-id}/message_templates` — list message templates        → `template list`
   - `POST /{waba-id}/message_templates` — create a message template     → `template create`
-  - `POST /{phone-number-id}/messages` — send a template or session msg → `send`
   - `POST /{app-id}/subscriptions` (object=whatsapp_business_account)   → `webhook subscribe`
 
 API version follows the same `API_VERSION` constant (config.py, `META_API_VERSION` env
@@ -219,7 +217,7 @@ def phone_number_info(phone_number_id, fields, as_json):
 
 @whatsapp.group("template")
 def template_group():
-    """Message template commands (required for sends outside the 24h window)."""
+    """Message template commands (list existing templates, submit new ones for review)."""
 
 
 @template_group.command("list")
@@ -252,8 +250,8 @@ def template_create(name, category, language, components_json, waba_id, dry_run,
     LANGUAGE is a locale code (e.g. "en_US"). COMPONENTS_JSON is a JSON array of template
     component objects (HEADER/BODY/FOOTER/BUTTONS, per Meta's Message Templates spec), e.g.
     '[{"type":"BODY","text":"Your order {{1}} has shipped."}]'. This call SUBMITS the
-    template for Meta review — it does not become sendable immediately; check its `status`
-    via `template list` before relying on it in a `send` call.
+    template for Meta review — it does not become approved immediately; check its `status`
+    via `template list`.
     """
     try:
         components = _json.loads(components_json)
@@ -271,72 +269,6 @@ def template_create(name, category, language, components_json, waba_id, dry_run,
         print_json(result)
         return
     click.secho(f"✓ Submitted template '{name}' for review → id {new_id or '?'}", fg="green")
-    print_json(result)
-
-
-# ── Send ─────────────────────────────────────────────────────
-
-
-@whatsapp.command("send")
-@click.argument("phone_number_id")
-@click.argument("to")
-@click.option("--template-name", default=None, help="Template send (default mode) — name of an approved message template.")
-@click.option("--template-language", default="en_US", help="Template locale code.")
-@click.option("--template-components", default=None, help="JSON array of template component *parameter* objects (values to fill {{1}}, {{2}}, ...).")
-@click.option("--text", default=None, help="Free-form session-message body. Only deliverable within Meta's 24h customer-service window — requires --confirm-24h-window.")
-@click.option("--confirm-24h-window", is_flag=True, help="Required alongside --text: explicit acknowledgement that free-form sends only work inside the 24h window.")
-@click.option("--dry-run", is_flag=True)
-@click.option("--yes", "-y", is_flag=True)
-@click.option("--json", "as_json", is_flag=True)
-def send_message(phone_number_id, to, template_name, template_language, template_components,
-                  text, confirm_24h_window, dry_run, yes, as_json):
-    """POST /{phone-number-id}/messages — send a WhatsApp message to TO (E.164 phone number).
-
-    Defaults to a TEMPLATE send (--template-name) since Cloud API only allows a free-form
-    (--text) session message within the 24-hour customer-service window opened by the
-    recipient's last inbound message — outside that window Meta rejects free-form sends
-    server-side (this CLI cannot verify window state client-side). Passing --text without
-    --confirm-24h-window is rejected up front with a VALIDATION error explaining this.
-    """
-    if bool(template_name) == bool(text):
-        raise SystemExit(print_error(
-            "Pass exactly one of --template-name (template send, the default/recommended "
-            "mode) or --text (free-form session message, requires --confirm-24h-window).",
-            code="VALIDATION", as_json=as_json,
-        ))
-    if text and not confirm_24h_window:
-        raise SystemExit(print_error(
-            "--text (free-form message) requires --confirm-24h-window: Cloud API only "
-            "delivers free-form messages within the 24h customer-service window opened by "
-            "the recipient's last inbound message. Outside that window, use a template send "
-            "(--template-name) instead. See kb/whatsapp-business-platform.md.",
-            code="VALIDATION", as_json=as_json,
-        ))
-
-    if template_name:
-        components = None
-        if template_components:
-            try:
-                components = _json.loads(template_components)
-            except _json.JSONDecodeError as e:
-                raise SystemExit(print_error(f"--template-components is not valid JSON: {e}", code="VALIDATION", as_json=as_json))
-        template_obj = {"name": template_name, "language": {"code": template_language}}
-        if components:
-            template_obj["components"] = components
-        body = {"messaging_product": "whatsapp", "to": to, "type": "template", "template": template_obj}
-        action = f"send template '{template_name}' to {to}"
-    else:
-        body = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text}}
-        action = f"send free-form message to {to}"
-
-    if not _confirm_and_log(action, _json.dumps(body), dry_run, yes):
-        return
-    result = graph_request("POST", f"{phone_number_id}/messages", json_body=body, as_json=as_json)
-    _auto_log("whatsapp_send", action, campaign_id=phone_number_id)
-    if as_json:
-        print_json(result)
-        return
-    click.secho(f"✓ {action}", fg="green")
     print_json(result)
 
 

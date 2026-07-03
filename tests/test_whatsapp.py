@@ -13,12 +13,15 @@ another concurrent change was in flight against test_mads.py at the time this wa
 Covers:
   * `mads whatsapp` group + every subgroup/subcommand --help exits 0
   * META_WABA_ID-required commands fail gracefully (VALIDATION, not a crash) when unset
-  * `template create` / `send` JSON-argument validation
-  * `send`'s exactly-one-of --template-name/--text gate, and the --confirm-24h-window gate
+  * `template create` JSON-argument validation
   * `webhook subscribe`'s META_APP_ID/META_APP_SECRET requirement and App Access Token shape
-  * success paths (mocked HTTP) for waba info, phone-number info, template list/create, send,
+  * success paths (mocked HTTP) for waba info, phone-number info, template list/create,
     webhook subscribe
   * --dry-run never touches the network for mutating commands
+
+Note: this module is management/analytics-only by design (no `send` command — sending/receiving
+messages requires the separate `whatsapp_business_messaging` OAuth scope, which Talas doesn't
+need; see mads_lib/whatsapp.py's module docstring and kb/whatsapp-business-platform.md).
 """
 import json
 import sqlite3
@@ -110,7 +113,6 @@ class TestWhatsappHelp:
         ["waba", "info"], ["waba", "phone-numbers"],
         ["phone-number", "info"],
         ["template", "list"], ["template", "create"],
-        ["send"],
         ["webhook", "subscribe"],
     ])
     def test_every_leaf_command_help_exits_0(self, args):
@@ -124,7 +126,7 @@ class TestWhatsappHelp:
         manifest = json.loads(result.output)
         entry = manifest["commands"]["whatsapp"]
         assert entry["is_group"] is True
-        assert set(entry["subcommands"].keys()) == {"waba", "phone-number", "template", "send", "webhook"}
+        assert set(entry["subcommands"].keys()) == {"waba", "phone-number", "template", "webhook"}
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -258,91 +260,6 @@ class TestTemplateCreate:
         assert body["category"] == "UTILITY"
         assert body["language"] == "en_US"
         assert body["components"] == [{"type": "BODY", "text": "Your order {{1}} has shipped."}]
-
-
-# ─────────────────────────────────────────────────────────────────────────
-# send — exactly-one-of gate, 24h-window gate, success paths, dry-run
-# ─────────────────────────────────────────────────────────────────────────
-
-
-class TestSendMessage:
-    def test_neither_template_nor_text_is_rejected(self):
-        result = runner.invoke(cli, ["whatsapp", "send", "phone_1", "+971500000000", "--json"])
-        assert result.exit_code == EXIT_CODES["VALIDATION"]
-
-    def test_both_template_and_text_is_rejected(self):
-        result = runner.invoke(cli, [
-            "whatsapp", "send", "phone_1", "+971500000000",
-            "--template-name", "order_shipped", "--text", "hi", "--json",
-        ])
-        assert result.exit_code == EXIT_CODES["VALIDATION"]
-
-    def test_text_without_confirm_24h_window_is_rejected(self):
-        result = runner.invoke(cli, [
-            "whatsapp", "send", "phone_1", "+971500000000", "--text", "hi", "--json",
-        ])
-        assert result.exit_code == EXIT_CODES["VALIDATION"]
-        payload = json.loads(result.output)
-        assert "24h" in payload["error"]["message"] or "24-hour" in payload["error"]["message"]
-
-    def test_dry_run_never_calls_network(self, monkeypatch):
-        calls = []
-        monkeypatch.setattr("mads_lib.http.requests.request", lambda *a, **k: calls.append(1))
-        result = runner.invoke(cli, [
-            "whatsapp", "send", "phone_1", "+971500000000",
-            "--template-name", "order_shipped", "--dry-run",
-        ])
-        assert result.exit_code == 0, result.output
-        assert "DRY RUN" in result.output
-        assert calls == []
-
-    def test_template_send_success_path(self, monkeypatch):
-        captured = []
-
-        def fake_request(method, url, **kwargs):
-            captured.append((method, url, kwargs))
-            return _FakeResponse(200, {"messages": [{"id": "wamid.abc"}]})
-
-        monkeypatch.setattr("mads_lib.http.requests.request", fake_request)
-        result = runner.invoke(cli, [
-            "whatsapp", "send", "phone_1", "+971500000000",
-            "--template-name", "order_shipped", "--template-language", "en_US", "--yes", "--json",
-        ])
-        assert result.exit_code == 0, result.output
-        assert json.loads(result.output)["messages"][0]["id"] == "wamid.abc"
-        method, url, kwargs = captured[0]
-        assert method == "POST"
-        assert url.endswith("phone_1/messages")
-        body = kwargs["json"]
-        assert body["messaging_product"] == "whatsapp"
-        assert body["to"] == "+971500000000"
-        assert body["type"] == "template"
-        assert body["template"] == {"name": "order_shipped", "language": {"code": "en_US"}}
-
-    def test_free_form_send_with_confirm_flag_succeeds(self, monkeypatch):
-        captured = []
-
-        def fake_request(method, url, **kwargs):
-            captured.append((method, url, kwargs))
-            return _FakeResponse(200, {"messages": [{"id": "wamid.def"}]})
-
-        monkeypatch.setattr("mads_lib.http.requests.request", fake_request)
-        result = runner.invoke(cli, [
-            "whatsapp", "send", "phone_1", "+971500000000",
-            "--text", "Your parts are ready for pickup.", "--confirm-24h-window", "--yes", "--json",
-        ])
-        assert result.exit_code == 0, result.output
-        method, url, kwargs = captured[0]
-        body = kwargs["json"]
-        assert body["type"] == "text"
-        assert body["text"] == {"body": "Your parts are ready for pickup."}
-
-    def test_invalid_template_components_json_rejected(self):
-        result = runner.invoke(cli, [
-            "whatsapp", "send", "phone_1", "+971500000000",
-            "--template-name", "order_shipped", "--template-components", "not-json", "--json",
-        ])
-        assert result.exit_code == EXIT_CODES["VALIDATION"]
 
 
 # ─────────────────────────────────────────────────────────────────────────

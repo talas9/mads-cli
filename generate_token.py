@@ -28,6 +28,7 @@ OAuth dialog + code/token exchange (no client_secret.json file — Meta apps
 use a plain App ID + App Secret pair instead of a downloadable client JSON).
 """
 import argparse
+import html
 import http.server
 import os
 import secrets
@@ -79,6 +80,8 @@ SCOPES = [
     "instagram_basic",
     "instagram_content_publish",
     "instagram_manage_comments",
+    "instagram_manage_insights",
+    "pages_manage_ads",
     # "catalog_management",  # UNCOMMENT once the app has "Catalog Management"
     # added under App Dashboard -> App Review -> Permissions and Features (App
     # ID 1332295765705902). Root-caused 2026-07-02: `mads commerce`
@@ -89,12 +92,17 @@ SCOPES = [
     # the full manual remediation steps; this is an App Dashboard action only
     # the account owner can perform, not fixable via the API alone.
     # "whatsapp_business_management",  # UNCOMMENT once a WhatsApp Business
-    # "whatsapp_business_messaging",   # Account (WABA) is onboarded for this
-    # app via Meta's Embedded Signup or Tech/Solution-Provider-mediated
-    # "coexistence" migration of an existing number onto the Cloud API — an
-    # account-level, Meta-eligibility-gated prerequisite this repo cannot
-    # complete for you. No WABA is onboarded for Talas yet (added 2026-07-02
-    # alongside mads_lib/whatsapp.py). See kb/whatsapp-business-platform.md.
+    # Account (WABA) is onboarded for this app via Meta's Embedded Signup or
+    # Tech/Solution-Provider-mediated "coexistence" migration of an existing
+    # number onto the Cloud API — an account-level, Meta-eligibility-gated
+    # prerequisite this repo cannot complete for you. This is the ONLY
+    # WhatsApp scope mads-cli needs: mads_lib/whatsapp.py is management/
+    # analytics-only (WABA/phone-number reads, template list/create, webhook
+    # subscribe) — it does not send or receive messages, so
+    # whatsapp_business_messaging (the separate scope required for
+    # POST /{phone-number-id}/messages) is intentionally not requested. No
+    # WABA is onboarded for Talas yet (added 2026-07-02 alongside
+    # mads_lib/whatsapp.py). See kb/whatsapp-business-platform.md.
 ]
 
 TOKEN_OUTPUT = CREDENTIALS_DIR / "meta-oauth.json"
@@ -112,6 +120,7 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
     code = None
     error = None
     expected_state = None
+    auth_url = None
 
     def do_GET(self):  # noqa: N802 (http.server API name)
         parsed = urllib.parse.urlparse(self.path)
@@ -133,13 +142,36 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
             self._respond("Authorization received. You can close this window.")
             return
 
-        self._respond("Waiting for authorization...")
+        self._respond_html(self._landing_page_html())
+
+    def _landing_page_html(self):
+        safe_auth_url = html.escape(_CallbackHandler.auth_url or "", quote=True)
+        return f"""<html>
+<head><title>Talas Meta Ads — Authorize</title></head>
+<body style="margin:0;padding:0;background:#f2f3f5;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;">
+  <div style="max-width:480px;margin:80px auto;background:#ffffff;border-radius:12px;
+              box-shadow:0 2px 10px rgba(0,0,0,0.08);padding:32px;text-align:center;">
+    <h3 style="margin-top:0;color:#1c1e21;">Authorize Talas Meta (Facebook/Instagram) access</h3>
+    <p style="color:#606770;font-size:14px;">Click the button below to grant this app access
+      to the Talas Meta Ads account.</p>
+    <a href="{safe_auth_url}"
+       style="display:inline-block;margin-top:16px;padding:12px 28px;background:#1877f2;
+              color:#ffffff;text-decoration:none;font-weight:bold;border-radius:6px;
+              font-size:16px;">Authorize with Facebook</a>
+    <p style="color:#8a8d91;font-size:12px;margin-top:24px;">You'll be redirected to Facebook,
+      then back here automatically.</p>
+  </div>
+</body>
+</html>"""
 
     def _respond(self, message):
+        self._respond_html(f"<html><body><h3>{message}</h3></body></html>")
+
+    def _respond_html(self, html_body):
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.end_headers()
-        self.wfile.write(f"<html><body><h3>{message}</h3></body></html>".encode("utf-8"))
+        self.wfile.write(html_body.encode("utf-8"))
 
     def log_message(self, format, *args):  # noqa: A002 - silence default request logging
         pass
@@ -149,7 +181,11 @@ def _print_auth_url_block(auth_url: str, port: int) -> None:
     """Print the auth URL with visual separators so terminals don't mangle it."""
     print()
     print(SEPARATOR)
-    print("Open this URL in your browser to authorize:")
+    print(f"Open http://localhost:{port}/ in your browser and click the")
+    print("\"Authorize with Facebook\" button.")
+    print()
+    print("(Fallback — if the local page doesn't load, open this raw auth URL")
+    print(" directly instead; it goes straight to the Facebook dialog):")
     print()
     print(auth_url)
     print()
@@ -183,6 +219,7 @@ def _run_local_server(auth_url: str, port: int, open_browser: bool, state: str) 
     _CallbackHandler.code = None
     _CallbackHandler.error = None
     _CallbackHandler.expected_state = state
+    _CallbackHandler.auth_url = auth_url
 
     server = http.server.HTTPServer(("localhost", port), _CallbackHandler)
 
