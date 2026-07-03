@@ -129,8 +129,9 @@ def _auto_log(action, details, campaign_id=""):
         }
         conn.execute(
             "INSERT INTO changelog (timestamp, action, campaign, campaign_id, details, "
-            "reason, agent, snapshot_ref, script, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ts, action, "", campaign_id, details, "", "mads-cli", "", "", _json.dumps(raw)),
+            "reason, agent, snapshot_ref, script, raw_json, platform) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, action, "", campaign_id, details, "", "mads-cli", "", "", _json.dumps(raw), "meta_ads"),
         )
         conn.commit()
         conn.close()

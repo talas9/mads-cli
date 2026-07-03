@@ -15,6 +15,7 @@ Covers, at minimum:
   * http.py's Meta error classifier mapping known error codes to exit codes
 """
 import json
+import sqlite3
 
 import click
 import pytest
@@ -518,6 +519,99 @@ class TestAutoLogSurvivesMissingDB:
 
         from mads_lib.cli import _auto_log
         _auto_log("test_action", "test details")
+
+
+class TestChangelogPlatformTag:
+    """Regression test for a real data-integrity bug found via audit: every
+    `INSERT INTO changelog` call site across mads-cli omitted the `platform`
+    column, so it silently fell back to the shared schema's
+    `platform TEXT NOT NULL DEFAULT 'google_ads'` (see talas-ads
+    `tools/init_db.py`) — every Meta Ads action was mislabeling itself as
+    Google Ads data in the changelog table shared with gads-cli. Verifies
+    each of the 8 call sites (`mads_lib.cli._auto_log`, the `log` command's
+    own INSERT, and the per-resource-module `_auto_log` in campaigns.py/
+    adsets.py/ads.py/creatives.py/pages.py/whatsapp.py) now explicitly writes
+    `platform='meta_ads'`.
+    """
+
+    @pytest.fixture
+    def real_changelog_db(self, tmp_path, monkeypatch):
+        """A real (temp-file) SQLite DB with a `changelog` table matching the
+        shared talas-ads schema (`tools/init_db.py`), including the
+        `platform TEXT NOT NULL DEFAULT 'google_ads'` column whose silent
+        fallback is exactly the bug being regression-tested here. `get_db()`
+        (mads_lib/db.py) only checks `DB_PATH.exists()` before opening a plain
+        `sqlite3.connect()` — patching the module-level `DB_PATH` name it
+        reads is enough to redirect every `_auto_log()`/`log` call site at
+        this fixture's file, regardless of which module imported `get_db`.
+        """
+        db_path = tmp_path / "test_changelog.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            """CREATE TABLE changelog (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                action TEXT, campaign TEXT, campaign_id TEXT,
+                details TEXT, reason TEXT, agent TEXT,
+                snapshot_ref TEXT, script TEXT, raw_json TEXT,
+                platform TEXT NOT NULL DEFAULT 'google_ads',
+                UNIQUE(timestamp, action)
+            )"""
+        )
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr("mads_lib.db.DB_PATH", db_path)
+        return db_path
+
+    @staticmethod
+    def _last_platform(db_path, action):
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT platform FROM changelog WHERE action = ? ORDER BY id DESC LIMIT 1", (action,)
+        ).fetchone()
+        conn.close()
+        assert row is not None, f"no changelog row written for action={action!r}"
+        return row[0]
+
+    def test_cli_auto_log_tags_meta_ads(self, real_changelog_db):
+        from mads_lib.cli import _auto_log
+        _auto_log("cli_test_action", "test details", campaign_name="c", campaign_id="123")
+        assert self._last_platform(real_changelog_db, "cli_test_action") == "meta_ads"
+
+    def test_log_command_tags_meta_ads(self, real_changelog_db):
+        result = runner.invoke(cli, ["log", "log_cmd_test_action", "test details"])
+        assert result.exit_code == 0, result.output
+        assert self._last_platform(real_changelog_db, "log_cmd_test_action") == "meta_ads"
+
+    def test_campaigns_auto_log_tags_meta_ads(self, real_changelog_db):
+        from mads_lib.campaigns import _auto_log
+        _auto_log("campaigns_test_action", "test details")
+        assert self._last_platform(real_changelog_db, "campaigns_test_action") == "meta_ads"
+
+    def test_adsets_auto_log_tags_meta_ads(self, real_changelog_db):
+        from mads_lib.adsets import _auto_log
+        _auto_log("adsets_test_action", "test details")
+        assert self._last_platform(real_changelog_db, "adsets_test_action") == "meta_ads"
+
+    def test_ads_auto_log_tags_meta_ads(self, real_changelog_db):
+        from mads_lib.ads import _auto_log
+        _auto_log("ads_test_action", "test details")
+        assert self._last_platform(real_changelog_db, "ads_test_action") == "meta_ads"
+
+    def test_creatives_auto_log_tags_meta_ads(self, real_changelog_db):
+        from mads_lib.creatives import _auto_log
+        _auto_log("creatives_test_action", "test details")
+        assert self._last_platform(real_changelog_db, "creatives_test_action") == "meta_ads"
+
+    def test_pages_auto_log_tags_meta_ads(self, real_changelog_db):
+        from mads_lib.pages import _auto_log
+        _auto_log("pages_test_action", "test details")
+        assert self._last_platform(real_changelog_db, "pages_test_action") == "meta_ads"
+
+    def test_whatsapp_auto_log_tags_meta_ads(self, real_changelog_db):
+        from mads_lib.whatsapp import _auto_log
+        _auto_log("whatsapp_test_action", "test details")
+        assert self._last_platform(real_changelog_db, "whatsapp_test_action") == "meta_ads"
 
 
 class TestGraphRequestNetworkErrors:
