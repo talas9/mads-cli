@@ -1202,3 +1202,119 @@ class TestAdsetCreatePlacementTargeting:
         # Raw --targeting JSON fully overrides all convenience flags — same
         # pre-existing behavior as --countries/--age-min/--age-max.
         assert targeting == {"geo_locations": {"countries": ["US"]}}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# kb check/list/show — ported from gads-cli's `gads kb` command group
+# (gads-cli has no dedicated kb-specific test file of its own to mirror; the
+# mocking approach below follows this file's own conventions instead, e.g.
+# TestAccountIdValidation's `monkeypatch.setattr("mads_lib.<module>.<NAME>", ...)`
+# pattern for patching module-level constants/functions read at call time).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestKbCommands:
+    _FAKE_MANIFEST = [
+        {
+            "api": "Meta Marketing API",
+            "slug": "marketing-api",
+            "current_version": "v25.0",
+            "base_url": "https://graph.facebook.com/{version}/act_{ad_account_id}/{edge}",
+            "oauth_scopes": ["ads_management"],
+            "status": "active",
+            "sunset_date_or_null": None,
+            "kb_file": "marketing-api.md",
+        },
+    ]
+
+    def test_check_reports_no_drift_when_manifest_matches_code(self, monkeypatch):
+        """Real kb/manifest.json + real config.API_VERSION — as of this test,
+        every slug is pinned to v25.0, matching mads_lib.config.API_VERSION.
+        """
+        result = runner.invoke(cli, ["kb", "check", "--json"])
+
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert len(rows) >= 1
+        assert all(r["drift"] is False for r in rows)
+        assert all(r["status"] == "OK" for r in rows)
+
+    def test_check_human_mode_exits_0_when_no_drift(self):
+        result = runner.invoke(cli, ["kb", "check"])
+
+        assert result.exit_code == 0, result.output
+        assert "All API versions aligned with KB manifest." in result.output
+
+    def test_check_detects_drift_against_a_stale_manifest(self, monkeypatch):
+        """Force a mismatch by feeding check_drift() a manifest pinned to an
+        old version — mads_lib.kb.load_manifest() is called at check_drift()
+        call-time, so patching the module attribute here is sufficient.
+        """
+        stale_manifest = [dict(self._FAKE_MANIFEST[0], current_version="v1.0")]
+        monkeypatch.setattr("mads_lib.kb.load_manifest", lambda: stale_manifest)
+
+        result = runner.invoke(cli, ["kb", "check", "--json"])
+
+        # --json mode returns immediately with the results list — it does not
+        # raise SystemExit(1) even on drift (mirrors gads-cli's kb_check_cmd
+        # exactly: the sys.exit(1) only happens on the human-readable path).
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert len(rows) == 1
+        assert rows[0]["drift"] is True
+        assert rows[0]["status"] == "DRIFT"
+        assert rows[0]["manifest_version"] == "v1.0"
+
+    def test_check_human_mode_exits_1_on_drift(self, monkeypatch):
+        stale_manifest = [dict(self._FAKE_MANIFEST[0], current_version="v1.0")]
+        monkeypatch.setattr("mads_lib.kb.load_manifest", lambda: stale_manifest)
+
+        result = runner.invoke(cli, ["kb", "check"])
+
+        assert result.exit_code == 1, result.output
+        assert "DRIFT" in result.output
+        assert "DRIFT(S) detected" in result.output
+
+    def test_list_json_returns_real_kb_files_with_metadata(self):
+        result = runner.invoke(cli, ["kb", "list", "--json"])
+
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert len(rows) >= 1
+        slugs = {r["slug"] for r in rows}
+        assert "marketing-api" in slugs
+        for r in rows:
+            assert r["exists"] is True
+            assert r["size_bytes"] > 0
+
+    def test_list_flags_a_missing_kb_file_as_not_existing(self, monkeypatch):
+        missing_manifest = [dict(self._FAKE_MANIFEST[0], kb_file="does-not-exist.md")]
+        monkeypatch.setattr("mads_lib.kb.load_manifest", lambda: missing_manifest)
+
+        result = runner.invoke(cli, ["kb", "list", "--json"])
+
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert len(rows) == 1
+        assert rows[0]["exists"] is False
+        assert rows[0]["size_bytes"] == 0
+
+    def test_show_valid_slug_prints_file_contents(self):
+        result = runner.invoke(cli, ["kb", "show", "marketing-api"])
+
+        assert result.exit_code == 0, result.output
+        assert "Meta Marketing API" in result.output
+
+    def test_show_valid_filename_prints_file_contents(self):
+        result = runner.invoke(cli, ["kb", "show", "graph-api.md"])
+
+        assert result.exit_code == 0, result.output
+        assert len(result.output) > 0
+
+    def test_show_invalid_name_exits_1_with_available_slugs_listed(self):
+        result = runner.invoke(cli, ["kb", "show", "nonexistent-slug"])
+
+        assert result.exit_code == 1, result.output
+        assert "KB file not found for: nonexistent-slug" in result.output
+        assert "Available slugs:" in result.output
+        assert "marketing-api" in result.output

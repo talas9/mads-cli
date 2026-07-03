@@ -51,7 +51,7 @@ into the JSON error object.
 
 ## Command Taxonomy
 
-Verified by walking the live Click tree (`mads catalog`) — **106 commands** across 18 groups (17
+Verified by walking the live Click tree (`mads catalog`) — **109 commands** across 19 groups (18
 resource groups plus Core).
 
 | Group | Commands | Description |
@@ -71,6 +71,7 @@ resource groups plus Core).
 | **Commerce** | `commerce create-catalog`, `create-feed`, `upload-feed`, `create-product`, `list-products`, `batch-update`, `batch-status` | Commerce Manager: ProductCatalog/ProductFeed/ProductItem CRUD + Catalog Batch API |
 | **CAPI** | `capi create-pixel`, `create-dataset`, `list-pixels`, `send-event`, `test-event`, `hash-user-data` | Conversions API pixel/dataset management, server-side event send, local PII hashing utility |
 | **Analyze** | `analyze audit`, `budget-pacing`, `creative-fatigue`, `audience-overlap`, `placement-breakdown` | Read-only analysis (mirrors gads-cli's `analyze` group) — none of these mutate the account |
+| **KB** | `kb check`, `list`, `show` | API knowledge-base drift check (CI-able), listing, and display — mirrors gads-cli's `gads kb` group exactly |
 | **WhatsApp** | `whatsapp waba info/phone-numbers`, `phone-number info`, `template list/create`, `send`, `webhook subscribe` | WhatsApp Business Platform (Cloud API) — a **separate Meta product** from the Marketing/Graph API surface above; **not yet onboarded for Talas** (no WABA — see Known Gotchas #6) |
 | **Post** | `post create`, `create-ig`, `list`, `delete` | Facebook Page + Instagram organic content (posts/media) — **live commands blocked on missing OAuth scopes** (see Known Gotchas #8) |
 | **Comment** | `comment list`, `reply`, `hide`, `delete` | Facebook Page + Instagram comment moderation — **same permission gap as Post** (see Known Gotchas #8) |
@@ -268,8 +269,9 @@ Root-caused 2026-07-02, same class of gap as Gotcha #6's `catalog_management` bl
    version-expiration clocks; check both).
 2. `kb/manifest.json` — update `current_version` for the affected API slug.
 3. Cross-check `mads_lib/config.py`'s `API_VERSION` default (`META_API_VERSION` env var) against
-   the KB — there is no automated `kb check` command in mads-cli yet (gads-cli has one via
-   `gads kb check`); this must be done manually until that command is ported over.
+   the KB by running `mads kb check` (CI-able — mirrors gads-cli's `gads kb check` exactly; exits
+   non-zero on drift). `mads kb list` lists every KB file with its API coverage, and
+   `mads kb show <slug-or-filename>` prints a specific KB doc's contents.
 
 ## Sister tool
 

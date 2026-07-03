@@ -48,6 +48,7 @@ from mads_lib.config import API_VERSION
 from mads_lib.http import batch_request, graph_request
 from mads_lib.output import EXIT_CODES, print_error
 from mads_lib import dbread
+from mads_lib.kb import check_drift, list_kb_files, show_kb_file, load_manifest
 
 # ── Resource-group Click groups ──────────────────────────────
 # These modules each define a `@click.group()` that is registered on the
@@ -1742,13 +1743,76 @@ def comment_delete(comment_id, dry_run, yes, as_json):
     click.secho(f"✓ Deleted comment {comment_id}", fg="green")
 
 
-# ── Group registration (audience/commerce/capi/analyze/post/comment) ─
+# ── KB (Knowledge Base — API version drift detection and KB surfacing) ──
+# Wraps mads_lib/kb.py (pure functions, no Click of its own — see the NOTE
+# near the top imports). Mirrors gads-cli's `gads kb check/list/show`.
+
+
+@cli.group()
+def kb():
+    """Knowledge Base — API version drift detection and KB surfacing."""
+    pass
+
+
+@kb.command("check")
+@click.option("--json", "as_json", is_flag=True)
+def kb_check_cmd(as_json):
+    """Compare code API version against kb/manifest.json. Exits non-zero on drift."""
+    results = check_drift()
+    if as_json:
+        return print_json(results)
+    click.secho("\n  KB Drift Check\n", fg="white", bold=True)
+    slug_width = max((len(r["slug"]) for r in results), default=15)
+    for r in results:
+        status = r["status"]
+        color = "red" if r["drift"] else "green"
+        click.secho(
+            f"  [{status}] {r['slug']:{slug_width}s} manifest={r['manifest_version']:8s} code={r['code_version']:8s}  {r['api']}",
+            fg=color,
+        )
+    drifts = [r for r in results if r["drift"]]
+    click.echo()
+    if drifts:
+        click.secho(f"  {len(drifts)} DRIFT(S) detected. Update kb/<api>.md + manifest.json when bumping API versions.", fg="red")
+        raise SystemExit(1)
+    else:
+        click.secho("  All API versions aligned with KB manifest.", fg="green")
+
+
+@kb.command("list")
+@click.option("--json", "as_json", is_flag=True)
+def kb_list_cmd(as_json):
+    """List all KB files with their API coverage."""
+    files = list_kb_files()
+    if as_json:
+        return print_json(files)
+    rows = [{"file": f["file"], "api": f["api"][:40], "exists": f["exists"], "size_bytes": f["size_bytes"]} for f in files]
+    print_table(rows, ["file", "api", "exists", "size_bytes"])
+
+
+@kb.command("show")
+@click.argument("api")
+def kb_show_cmd(api):
+    """Show KB documentation for an API (by slug or filename)."""
+    try:
+        content = show_kb_file(api)
+        click.echo(content)
+    except FileNotFoundError as e:
+        click.secho(f"✗ {e}", fg="red", err=True)
+        manifest = load_manifest()
+        slugs = sorted(set(entry["slug"] for entry in manifest))
+        click.echo(f"  Available slugs: {', '.join(slugs)}", err=True)
+        raise SystemExit(1)
+
+
+# ── Group registration (audience/commerce/capi/analyze/post/comment/kb) ─
 cli.add_command(audience)
 cli.add_command(commerce)
 cli.add_command(capi)
 cli.add_command(analyze)
 cli.add_command(post)
 cli.add_command(comment)
+cli.add_command(kb)
 
 
 def main():
