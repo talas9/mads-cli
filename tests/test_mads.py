@@ -614,6 +614,83 @@ class TestChangelogPlatformTag:
         assert self._last_platform(real_changelog_db, "whatsapp_test_action") == "meta_ads"
 
 
+class TestSnapshotDbWrite:
+    """Regression test for a real data-integrity bug found via audit: the
+    `snapshot` command's `INSERT OR REPLACE INTO snapshots` used 5 positional
+    placeholders (`VALUES (?, ?, ?, ?, ?)`) against the shared talas-ads
+    schema's 6-column `snapshots` table (`tools/init_db.py`: filename, date,
+    time, description, related_action, platform — `platform` added in a
+    later migration, `DEFAULT 'google_ads'`). Every call raised a
+    sqlite3.OperationalError that was silently swallowed by a broad
+    `except (Exception, SystemExit): pass`, so `mads snapshot` had likely
+    never written a single row to the local DB — only its JSON file output
+    ever actually persisted. Also verifies the swallow-everything except
+    clause now surfaces a visible warning instead of passing silently, so a
+    future schema drift can't break this again unnoticed.
+    """
+
+    @pytest.fixture
+    def real_snapshots_db(self, tmp_path, monkeypatch):
+        """A real (temp-file) SQLite DB with a `snapshots` table matching the
+        shared talas-ads schema (`tools/init_db.py`) exactly, including the
+        `platform TEXT DEFAULT 'google_ads'` column whose omission from the
+        INSERT's column count is exactly the bug being regression-tested
+        here. Same monkeypatch approach as `TestChangelogPlatformTag`: patch
+        the module-level `mads_lib.db.DB_PATH` that `get_db()` reads.
+        """
+        db_path = tmp_path / "test_snapshots.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            """CREATE TABLE snapshots (
+                filename TEXT PRIMARY KEY, date TEXT, time TEXT,
+                description TEXT, related_action TEXT,
+                platform TEXT DEFAULT 'google_ads'
+            )"""
+        )
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr("mads_lib.db.DB_PATH", db_path)
+        return db_path
+
+    def test_snapshot_command_inserts_row_with_all_six_columns(self, real_snapshots_db):
+        result = runner.invoke(cli, ["snapshot", "regression-test-snapshot"])
+        assert result.exit_code == 0, result.output
+
+        conn = sqlite3.connect(str(real_snapshots_db))
+        row = conn.execute(
+            "SELECT filename, date, time, description, related_action, platform "
+            "FROM snapshots ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        conn.close()
+
+        assert row is not None, "snapshot command did not insert any row into the snapshots table"
+        filename, date, time_, description, related_action, platform = row
+        assert filename.endswith("_regression-test-snapshot.json")
+        assert description == "regression-test-snapshot"
+        assert date, "date column was not populated"
+        assert time_, "time column was not populated"
+        assert related_action is not None
+        assert platform == "meta_ads"
+
+    def test_snapshot_warns_instead_of_silently_swallowing_db_errors(self, tmp_path, monkeypatch):
+        """If the DB write breaks (e.g. missing/drifted `snapshots` table),
+        the command must still exit 0 (best-effort DB record, mirrors the
+        rest of this codebase's graceful-degradation convention) but must
+        print a visible warning rather than passing silently.
+        """
+        db_path = tmp_path / "no_snapshots_table.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE changelog (id INTEGER PRIMARY KEY)")  # no snapshots table at all
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr("mads_lib.db.DB_PATH", db_path)
+
+        result = runner.invoke(cli, ["snapshot", "broken-db-test"])
+        assert result.exit_code == 0, result.output
+        assert "warning" in result.output.lower(), result.output
+        assert "no such table" in result.output.lower(), result.output
+
+
 class TestGraphRequestNetworkErrors:
     """Network-layer failures (timeouts, DNS/connection errors) must be
     caught distinctly from HTTP-level 4xx/5xx API errors and produce a

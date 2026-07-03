@@ -656,13 +656,15 @@ def snapshot(name, save_file, as_json):
         conn = get_db()
         note = "" if live_data["available"] else (live_data["reason"] or "")
         conn.execute(
-            "INSERT OR REPLACE INTO snapshots VALUES (?, ?, ?, ?, ?)",
-            (filename, ts_date, datetime.now().strftime("%H:%M:%S"), name, note),
+            "INSERT OR REPLACE INTO snapshots "
+            "(filename, date, time, description, related_action, platform) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (filename, ts_date, datetime.now().strftime("%H:%M:%S"), name, note, "meta_ads"),
         )
         conn.commit()
         conn.close()
-    except (Exception, SystemExit):
-        pass
+    except (Exception, SystemExit) as e:
+        click.secho(f"  Warning: snapshot DB record not written: {e}", fg="yellow", err=True)
 
     written_path = None
     if save_file:
