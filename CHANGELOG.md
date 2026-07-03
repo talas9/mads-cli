@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-07-03
+
+### Fixed
+
+- **Resolved the 6-scope OAuth gap from 0.3.0**: `pages_manage_posts`, `pages_manage_engagement`,
+  `pages_manage_metadata`, `instagram_basic`, `instagram_content_publish`,
+  `instagram_manage_comments` are now granted on the live Talas token (plus
+  `instagram_manage_insights` and `pages_manage_ads`, added to `SCOPES` in the same pass). Granted
+  via the App Dashboard's Use-cases UI, Dev-Mode admin access — no App Review required. `post`/
+  `comment`/`page update` commands are scope-unblocked; see AGENTS.md Known Gotchas #8 (RESOLVED).
+
 ## [0.3.0] - 2026-07-02
 
 ### Added
@@ -49,7 +60,8 @@ All notable changes to this project will be documented in this file.
   gap as the pre-existing `catalog_management` blocker). Live `post`/`comment`/`page
   update` commands will fail with a permission error until a human re-runs
   `python generate_token.py` (interactive OAuth re-consent) and clears any required Meta
-  App Review. See AGENTS.md Known Gotchas for the full remediation steps.
+  App Review. See AGENTS.md Known Gotchas for the full remediation steps. **RESOLVED
+  2026-07-03 — see the [0.3.1] entry above.**
 
 ### Notes
 

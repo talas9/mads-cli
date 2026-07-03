@@ -73,8 +73,8 @@ resource groups plus Core).
 | **Analyze** | `analyze audit`, `budget-pacing`, `creative-fatigue`, `audience-overlap`, `placement-breakdown` | Read-only analysis (mirrors gads-cli's `analyze` group) — none of these mutate the account |
 | **KB** | `kb check`, `list`, `show` | API knowledge-base drift check (CI-able), listing, and display — mirrors gads-cli's `gads kb` group exactly |
 | **WhatsApp** | `whatsapp waba info/phone-numbers`, `phone-number info`, `template list/create`, `send`, `webhook subscribe` | WhatsApp Business Platform (Cloud API) — a **separate Meta product** from the Marketing/Graph API surface above; **not yet onboarded for Talas** (no WABA — see Known Gotchas #6) |
-| **Post** | `post create`, `create-ig`, `list`, `delete` | Facebook Page + Instagram organic content (posts/media) — **live commands blocked on missing OAuth scopes** (see Known Gotchas #8) |
-| **Comment** | `comment list`, `reply`, `hide`, `delete` | Facebook Page + Instagram comment moderation — **same permission gap as Post** (see Known Gotchas #8) |
+| **Post** | `post create`, `create-ig`, `list`, `delete` | Facebook Page + Instagram organic content (posts/media) — **scope-unblocked as of 2026-07-03** (see Known Gotchas #8) |
+| **Comment** | `comment list`, `reply`, `hide`, `delete` | Facebook Page + Instagram comment moderation — **scope-unblocked as of 2026-07-03, same history as Post** (see Known Gotchas #8) |
 
 > Note: `auth system-user`/`auth token` and `business system-user`/`business token` both exist
 > and call the same Business Manager System User endpoints (`POST/GET {business_id}/system_users`,
@@ -227,39 +227,44 @@ command in `mads_lib/whatsapp.py` fails gracefully with a VALIDATION error
 App Access Token — `app_id|app_secret` — not the general user/system-user token this CLI uses
 elsewhere). See `kb/whatsapp-business-platform.md` for full detail.
 
-**8. `post`/`comment`/`page update` commands are blocked until the app is granted 6 new
-permissions.** Every `post create`/`create-ig`/`list`/`delete`, `comment list`/`reply`/`hide`/
-`delete`, and `page update` call will fail live — `create`/`list`/`delete`-style calls typically
-with a `(#200)` permissions error, `page update` with the same class of failure — because none of
-`pages_manage_posts`, `pages_manage_engagement`, `pages_manage_metadata`, `instagram_basic`,
-`instagram_content_publish`, `instagram_manage_comments` are granted on the live Talas token.
-Root-caused 2026-07-02, same class of gap as Gotcha #6's `catalog_management` block:
+**8. `post`/`comment`/`page update` commands — RESOLVED 2026-07-03 (scopes now granted; historical
+gap kept below for context).** Originally, every `post create`/`create-ig`/`list`/`delete`,
+`comment list`/`reply`/`hide`/`delete`, and `page update` call failed live — `create`/`list`/
+`delete`-style calls typically with a `(#200)` permissions error, `page update` with the same
+class of failure — because none of `pages_manage_posts`, `pages_manage_engagement`,
+`pages_manage_metadata`, `instagram_basic`, `instagram_content_publish`,
+`instagram_manage_comments` were granted on the live Talas token. Root-caused 2026-07-02, same
+class of gap as Gotcha #6's `catalog_management` block.
 
-- Confirmed via `GET /me/permissions`: the granted-permissions list currently contains
-  `ads_management, ads_read, business_management, pages_read_engagement, pages_show_list` and
-  none of the six scopes above.
-- `generate_token.py`'s `SCOPES` list was missing all six until this feature was built — they are
-  now present (uncommented, active) in `SCOPES`, but adding them to the *code* does not grant them
-  on the *live token*; only a fresh interactive OAuth consent does that.
-- **Not fixable via any API call available to an agent session** — there is no endpoint that lets
-  an authenticated admin self-grant a new OAuth permission scope to their own existing token.
-- **Manual remediation steps for the account owner** (numbered, precise — perform in this order):
-  1. Confirm the six scopes are present in `mads-cli/generate_token.py`'s `SCOPES` list (already
-     done as of this addition — nothing to edit here unless they were later removed).
-  2. Re-run the interactive OAuth flow: `python generate_token.py` (or `--no-browser
-     --print-url-only` on a headless host, then open the printed URL manually) to mint a new
-     long-lived token carrying the new scopes — this step requires the account owner's
-     browser/login session and cannot be completed by an agent.
-  3. If Meta requires App Review before granting any of these (Standard Access is typically
-     sufficient for an app whose only calls are made by an admin of the Page/IG asset being
-     posted to — verify this holds at grant time rather than assuming it, per the `catalog_management`
-     precedent proving that assumption can silently fail), complete App Review for the specific
-     permission(s) that require it under App Dashboard → App Review → Permissions and Features
-     before step 2 will succeed for those scopes.
-  4. Verify with `mads query --node me/permissions --json` that all six scopes now show
-     `"status": "granted"`.
-  5. Only then re-test a real (disposable, easily-deletable) post/comment live — see the
-     Verification section of the originating plan for this feature.
+**Resolved 2026-07-03**: the account owner re-authed the token via the App Dashboard's **Use
+cases** UI — enabling "Manage messaging & content on Instagram" and "Manage everything on your
+Page" use cases under Dev-Mode admin access, with **no App Review required**. `GET
+/me/permissions` now confirms ALL of the following as granted: `instagram_basic`,
+`instagram_manage_insights`, `instagram_content_publish`, `instagram_manage_comments`,
+`pages_manage_posts`, `pages_manage_engagement`, `pages_manage_metadata`, `pages_manage_ads`, plus
+the original `ads_management`, `ads_read`, `business_management`, `pages_read_engagement`,
+`pages_show_list`, and now also `pages_read_user_content`. `post`/`comment`/`page update` commands
+are therefore **scope-unblocked** and usable live as of this date.
+
+Do not overclaim beyond scope-unblocking: this confirms the OAuth permission gate is cleared, not
+that every command path has been exercised against a real object. **Still test any live
+post/comment on a disposable, easily-deletable object first** before relying on this in
+production workflows.
+
+Historical remediation steps (kept for reference / in case scopes are ever revoked and need
+re-granting):
+1. Confirm the scopes are present in `mads-cli/generate_token.py`'s `SCOPES` list.
+2. Re-run the interactive OAuth flow: `python generate_token.py` (or `--no-browser
+   --print-url-only` on a headless host, then open the printed URL manually) to mint a new
+   long-lived token carrying the new scopes — this step requires the account owner's
+   browser/login session and cannot be completed by an agent.
+3. If Meta requires App Review before granting any of these, complete App Review for the specific
+   permission(s) that require it under App Dashboard → App Review → Permissions and Features
+   before step 2 will succeed for those scopes. (In practice, for this grant, the App Dashboard's
+   Use-cases UI + Dev-Mode admin access was sufficient — no App Review was needed.)
+4. Verify with `mads query --node me/permissions --json` that the scopes show `"status":
+   "granted"`.
+5. Only then re-test a real (disposable, easily-deletable) post/comment live.
 
 ## KB Version Drift Rule
 

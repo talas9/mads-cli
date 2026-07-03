@@ -44,6 +44,16 @@ Before assuming any command shape, run discovery — do not guess flags or subco
 and status. Read the specific KB file for the resource you're touching before writing code against
 it — do not rely on training-data knowledge of the Meta Marketing API, which changes frequently.
 
+## Operating directive: run it yourself
+
+Execute `mads` commands yourself — snapshot, mutate, log — rather than handing the user
+copy-paste commands to run. The user's involvement is limited to the irreducible minimum:
+only steps a script genuinely cannot perform, such as the browser click in an interactive
+OAuth consent flow (see Gotcha #7/#8 in `AGENTS.md`) or another physical/off-system action.
+For those unavoidable human steps, still do everything around them — run the local flow,
+generate and hand over the exact URL/action needed, then verify the result yourself.
+Default to action over instruction.
+
 ## Sister tool
 
 For **Google Ads, Google Business Profile (GBP), Google Merchant Center, GA4, and Google Search
